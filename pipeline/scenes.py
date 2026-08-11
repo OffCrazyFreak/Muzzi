@@ -283,7 +283,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--report", action="store_true")
-    args = ap.parse_args()
+    ap.parse_args()
 
     from pipeline import artist_names
     from pipeline.write_tags import split_credits

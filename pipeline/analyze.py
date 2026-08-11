@@ -27,9 +27,7 @@ Usage: analyze.py <dir> [-j workers] [--force]
 import argparse
 import hashlib
 import json
-import math
 import os
-import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -187,7 +185,7 @@ def analyse_one(args):
         def to_ref(b, ref):
             if not b:
                 return b
-            best, cand = b, b
+            cand = b
             while cand < ref / 1.45:
                 cand *= 2
             while cand > ref * 1.45:

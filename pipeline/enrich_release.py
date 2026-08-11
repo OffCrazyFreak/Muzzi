@@ -39,7 +39,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
 from pipeline.identify import RateLimiter  # noqa: E402
-from pipeline.webmatch import fit, norm  # noqa: E402
+from pipeline.webmatch import fit  # noqa: E402
 
 REVIEW = os.path.join(HERE, "cache", "review.json")
 OUT = os.path.join(HERE, "cache", "release_years.json")

@@ -34,7 +34,6 @@ import requests
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
-from pipeline.probe_match import split_name  # noqa: E402  (cruft-stripping parser)
 from pipeline import tagseed  # noqa: E402
 
 FP_CACHE = os.path.join(HERE, "cache", "fingerprints.json")

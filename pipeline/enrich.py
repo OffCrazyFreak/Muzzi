@@ -17,7 +17,6 @@ Usage: enrich.py [--limit N] [-j workers]
 import argparse
 import json
 import os
-import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed

@@ -16,7 +16,6 @@ import os
 import random
 import re
 import sys
-import unicodedata
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pipeline.fingerprint import likely_balkan  # noqa: E402
