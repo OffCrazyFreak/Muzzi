@@ -126,6 +126,32 @@ def main():
     R = {"files": n}
     print(f"=== {n} output files ===\n")
 
+    # Every section below skips rows whose measurement is missing, so a file
+    # that failed to probe or decode contributes to no mismatch count. Left
+    # unsaid, a run where half the library failed reads exactly like a clean
+    # one. Report the failures first, before any "0 mismatches" line.
+    failed = {}
+    for r in rows:
+        why = [k for k in ("probe_error", "lufs_error", "mono_lufs_error")
+               if r["truth"].get(k)]
+        if r["cut"].get("error"):
+            why.append("cutoff_error")
+        if not r["cache"]:
+            why.append("no_cache_entry")
+        if why:
+            failed[r["path"]] = why
+    R["unmeasured"] = {"files": len(failed),
+                       "reasons": dict(Counter(w for v in failed.values()
+                                               for w in v)),
+                       "worst": sorted(failed)[:25]}
+    if failed:
+        print(f"UNMEASURED  {pct(len(failed), n)} of files are missing at "
+              f"least one measurement and are skipped below")
+        for k, v in sorted(R["unmeasured"]["reasons"].items(),
+                           key=lambda x: -x[1]):
+            print(f"    {k:16s} {v}")
+        print()
+
     # ---------- loudness ----------
     e_true, e_mono, rg_internal, rg_true, clip = [], [], [], [], 0
     for r in rows:
