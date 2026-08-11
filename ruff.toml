@@ -1,0 +1,9 @@
+# CI runs `ruff check .` on every push. The rule set is deliberately narrow:
+# pyflakes and syntax errors, the ones that mean a real defect. Style is not
+# enforced, so a diff stays about behaviour and CI stays honest about failing.
+target-version = "py39"
+line-length = 100
+exclude = ["bin", "cache", "features", "models", "out", "redownloaded", "review"]
+
+[lint]
+select = ["E9", "F"]
