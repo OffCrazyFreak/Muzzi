@@ -133,10 +133,13 @@ branch-scoped, and git will not warn you, because git is not watching them.
   the file's own location, so it stays inside your worktree; a bare
   `out/_all` or `cache/analysis.json` argument does not, and lands on the real
   library instead.
-- **Never regenerate a shared cache file to test a change.** Rewriting
+- **Never regenerate shared state to test a change.** Rewriting
   `analysis.json` while another session is testing `dedupe` makes both sets of
   results unattributable, and `dedupe` picks which copy of a song to keep from
-  exactly that file.
+  exactly that file. Rebuilding it as the task itself is a different thing and
+  is allowed: announce it before you start, not after, so other sessions can
+  stand clear. Keep a pre-change copy, and say which files and which fields you
+  touched.
 - **Read-only is fine.** Copy what you need into your worktree and work on the
   copy. Data flows in, never back out.
 - **Never delete or prune shared state** to get a clean run. Someone else is
