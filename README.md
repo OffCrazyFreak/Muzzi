@@ -25,15 +25,28 @@ review/            numbered spreadsheets, only what needs your eyes
 hints.tsv          every answer you have ever given, kept permanently
 ```
 
-Playlists use relative paths, which is what Namida and YouTube Music want.
-`export.py --absolute` adds a second set with absolute phone paths, for
-Poweramp and anything else that ignores relative ones.
+---
 
-Filenames come out as `Artist - Title (ft. Other) [131 BPM].mp3`. The BPM is in
-the name because Samsung Music has no BPM field and won't show the tag.
+## Target players
 
-Lyrics are written twice: embedded (Namida and most players read this) and as a
-`.lrc` sidecar (Samsung Music reads **only** sidecars).
+The output is aimed at Android. **Namida** sets the ceiling: it reads the most
+metadata, so anything worth tagging is tagged the way it expects. **Samsung
+Music** sets the floor: no BPM field, `.lrc` sidecars only, no webm. Every
+other player (Poweramp, Musicolet, Retro Music, Symfonium, AIMP, YouTube Music
+offline, stock OEM players) has to work too, so nothing here depends on one
+app being installed.
+
+That is why:
+
+- Playlists use relative paths, which is what Namida and YouTube Music want.
+  `export.py --absolute` adds a second set with absolute phone paths, for
+  Poweramp and anything else that ignores relative ones.
+- Filenames come out as `Artist - Title (ft. Other) [131 BPM].mp3`. The BPM is
+  in the name because Samsung Music has no BPM field and won't show the tag.
+- Lyrics are written twice: embedded (Namida and most players read this) and as
+  a `.lrc` sidecar (Samsung Music reads **only** sidecars).
+
+`AGENTS.md` has the rules that follow from this, for anyone changing the code.
 
 ---
 
