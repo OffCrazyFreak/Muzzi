@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Measure ground truth from the audio itself, for auditing written tags.
 
-verify.py reads tags only. This decodes: duration, bitrate, integrated LUFS
-(ffmpeg ebur128) and, in a second pass, the spectral cutoff via essentia --
-so tag values can be checked against the file they claim to describe.
+verify.py reads tags only. This measures duration, bitrate and integrated
+LUFS with ffprobe and ffmpeg, so tag values can be checked against the file
+they claim to describe. Spectral cutoff is measured separately, by
+audit_cutoff.py, which needs essentia; the two reports are joined by
+audit_compare.py.
 
 Usage: audit_truth.py DIR OUT.json [-j N]
 """
