@@ -28,7 +28,14 @@ def probe(path):
            "stream=codec_name,bit_rate,sample_rate,channels,duration",
            "-of", "json", path]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
+                           check=False)
+        # A non-zero exit means ffprobe rejected the file. Parsing its empty
+        # stdout would report a damaged file as merely missing data, which
+        # reads as "nothing to see" in the comparison.
+        if r.returncode != 0:
+            return {"probe_error": f"ffprobe exit {r.returncode}: "
+                                   f"{(r.stderr or '').strip()[:120]}"}
         d = json.loads(r.stdout or "{}")
     except Exception as e:
         return {"probe_error": f"{type(e).__name__}: {str(e)[:120]}"}
@@ -56,13 +63,19 @@ def _ebur128(path, pre=""):
     cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-i", path, "-af",
            pre + "ebur128=peak=true", "-f", "null", "-"]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900,
+                           check=False)
     except Exception as e:
         return None, None, f"{type(e).__name__}: {str(e)[:120]}", 0
     err = r.stderr or ""
     mi, mp = _I.search(err), _PEAK.findall(err)
+    # Keep whatever ffmpeg did print -- a partial decode still measures
+    # something useful -- but say so, or a failed run is indistinguishable
+    # from a file that simply had no loudness to report.
+    fail = (f"ffmpeg exit {r.returncode}: {err.strip()[-120:]}"
+            if r.returncode != 0 else None)
     return (float(mi.group(1)) if mi else None,
-            float(mp[-1]) if mp else None, None,
+            float(mp[-1]) if mp else None, fail,
             len(re.findall(r"Header missing|Error while decoding", err)))
 
 
