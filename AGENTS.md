@@ -171,8 +171,8 @@ miss. Types: `fix`, `feat`, `docs`, `refactor`, `chore`, `style`, `perf`, `ci`,
 `analyze`, `dedupe`, `lyrics`, `export`, `write_tags`, `review`, `scenes`,
 `agents`, `readme`, `deps`.
 
-Use full 40-character SHAs when referring to commits, and name the issues a
-commit or PR closes.
+Never add a `Co-Authored-By` trailer. Use full 40-character SHAs when referring
+to commits, and name the issues a commit or PR closes.
 
 ## Pull requests
 
