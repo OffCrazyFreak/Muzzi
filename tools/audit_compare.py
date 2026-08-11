@@ -152,6 +152,22 @@ def main():
             print(f"    {k:16s} {v}")
         print()
 
+    # ffmpeg conceals decode errors and still exits 0, so a measurement can
+    # come from partially reconstructed audio without any failure signal.
+    # These are not withheld -- on this library every one is a single
+    # "Header missing" frame at the start of an MP3, and dropping 44 sound
+    # measurements over one bad frame would cost more than it protects --
+    # but a run where the count climbs should not look identical to a clean
+    # one.
+    concealed = {r["path"]: r["truth"]["decode_errors"] for r in rows
+                 if (r["truth"].get("decode_errors") or 0) > 0}
+    R["decode_errors"] = {"files": len(concealed),
+                          "max": max(concealed.values(), default=0)}
+    if concealed:
+        print(f"DECODE      {pct(len(concealed), n)} of files decoded with "
+              f"concealed errors (max {max(concealed.values())} per file); "
+              f"their measurements are kept\n")
+
     # ---------- loudness ----------
     e_true, e_mono, rg_internal, rg_true, clip = [], [], [], [], 0
     for r in rows:
