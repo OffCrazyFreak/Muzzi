@@ -37,7 +37,14 @@ jobs:
       # checked. A reminder in AGENTS.md was not enough on its own.
       - name: No em or en dashes in Markdown
         run: |
-          if git grep -nP '[\x{2013}\x{2014}]' -- '*.md'; then
-            echo "::error::Use a plain hyphen. See AGENTS.md."
-            exit 1
-          fi
+          # Exit codes are read explicitly: git grep says 0 for found, 1 for
+          # none, anything else for a real failure such as a build without
+          # PCRE. A bare `if` would read that failure as "none found" and
+          # pass, which is a check that can never fail.
+          git grep -nP '[\x{2013}\x{2014}]' -- '*.md' && rc=0 || rc=$?
+          case "$rc" in
+            0) echo "::error::Use a plain hyphen. See AGENTS.md." ; exit 1 ;;
+            1) echo "No em or en dashes found." ;;
+            *) echo "::error::dash check could not run (git grep exit $rc)"
+               exit 1 ;;
+          esac
