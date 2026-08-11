@@ -25,3 +25,19 @@ jobs:
       # lives in ruff.toml, not here.
       - run: pip install ruff==0.16.2
       - run: ruff check .
+
+  dashes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Markdown only. The em and en dashes in the pipeline's regexes are
+      # there to match real song titles ("Artist - Title"), so Python is not
+      # checked. A reminder in AGENTS.md was not enough on its own.
+      - name: No em or en dashes in Markdown
+        run: |
+          if git grep -nP '[\x{2013}\x{2014}]' -- '*.md'; then
+            echo "::error::Use a plain hyphen. See AGENTS.md."
+            exit 1
+          fi
