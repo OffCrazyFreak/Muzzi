@@ -24,15 +24,18 @@ AUDIO_EXT = (".mp3", ".flac", ".m4a", ".ogg", ".opus", ".wav")
 def one(path):
     try:
         import essentia.standard as es
-        from pipeline.analyze import spectral_cutoff, grade_quality
+        from pipeline.analyze import (spectral_cutoff, grade_quality,
+                                      real_bitrate)
         audio = es.MonoLoader(filename=path, sampleRate=44100)()
         cut = spectral_cutoff(audio)
         info = es.MetadataReader(filename=path, failOnError=False)()
-        br = info[9] if len(info) > 9 else None
+        # Via the shared helper, not MetadataReader directly: reading info[9]
+        # here would reproduce the exact AAC bug this tool exists to catch.
+        br = real_bitrate(path, essentia_kbps=info[9] if len(info) > 9 else None)
         grade, suspect = grade_quality(cut, br)
         return {"path": path,
                 "true_cutoff_hz": round(cut) if cut else None,
-                "essentia_bitrate_kbps": br,
+                "true_bitrate_kbps": br,
                 "true_quality_grade": grade,
                 "true_quality_suspect": suspect,
                 "true_decoded_secs": round(len(audio) / 44100.0, 1)}

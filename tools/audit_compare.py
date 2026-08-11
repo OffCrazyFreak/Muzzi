@@ -21,7 +21,10 @@ import mutagen
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
-RG_TARGET_LUFS = -18.0
+# Imported, never redeclared: a second copy of this number means the audit
+# silently grades against a target the pipeline no longer uses.
+from pipeline.write_tags import RG_TARGET_LUFS  # noqa: E402
+
 YT = re.compile(r"(?:v=|youtu\.be/|/watch\?v=)([A-Za-z0-9_-]{11})")
 
 
@@ -163,6 +166,12 @@ def main():
     br_err, br_big = [], []
     for r in rows:
         cb = r["cache"].get("bitrate_kbps")
+        # Format level, not stream level. Neither ffprobe figure is clean:
+        # the format one counts the ID3 tag, so a file with large embedded
+        # art reads ~20 kbps high; the stream one is 4-8 kbps on the YouTube
+        # AAC files, which lack the esds box ffprobe would read it from --
+        # the same absence that makes essentia report 1. Format is wrong by
+        # a bounded overhead, stream is wrong by 20x, so format wins.
         pb = r["truth"].get("probe_bitrate_kbps")
         if cb and pb:
             d = cb - pb

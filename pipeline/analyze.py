@@ -128,6 +128,51 @@ def grade_quality(cutoff_hz, bitrate_kbps):
     return grade, suspect
 
 
+def real_bitrate(path, mf=None, header_dur=None, essentia_kbps=None):
+    """-> kbps that is true for MP3 and AAC alike, or None.
+
+    Essentia's MetadataReader reports 1 kbps for the AAC files YouTube
+    serves: they carry no esds bitrate box and it returns a placeholder
+    rather than failing. 132 of 261 m4a files here were cached at 1 against
+    a real 130-144, which silently killed the quality_suspect flag for every
+    AAC file in the library -- it needs >= 256 to ever trip.
+
+    Mutagen is not the fix on its own; it reports 0 for those same files.
+    But size over duration is already in hand, so the fallback is free, and
+    it lands within 8 kbps of ffprobe across all 250 AAC files here.
+
+    That fallback measures the whole container, so it reads a few kbps high
+    on a file carrying large embedded art. Harmless: the only consumer that
+    compares against a threshold is the quality_suspect flag at 256 kbps,
+    and the dedupe tie-break only needs the ordering to be right.
+    """
+    try:
+        if mf is None:
+            from mutagen import File as _MF
+            mf = _MF(path)
+        if header_dur is None and mf is not None and mf.info:
+            header_dur = float(mf.info.length)
+    except Exception:
+        mf = None
+
+    try:
+        br = int(getattr(mf.info, "bitrate", 0) or 0)
+        if br > 0:
+            return round(br / 1000)
+    except Exception:
+        pass
+
+    try:
+        if header_dur and header_dur > 0:
+            return round(os.path.getsize(path) * 8 / header_dur / 1000)
+    except OSError:
+        pass
+
+    # Last resort. Only reached when the file is unreadable by mutagen and
+    # unstattable, in which case the placeholder is no worse than nothing.
+    return essentia_kbps
+
+
 _VIBENET = None
 
 
@@ -161,7 +206,9 @@ def analyse_one(args):
         # a truncated download decodes to far less audio than its header
         # claims. Without this, a broken file still yields a confident BPM.
         decoded = len(audio) / 44100.0
-        header_dur = None
+        # Bound before the try: real_bitrate() reads `mf` further down, and an
+        # unreadable header would otherwise leave the name undefined there.
+        mf, header_dur = None, None
         try:
             from mutagen import File as _MF
             mf = _MF(path)
@@ -264,7 +311,11 @@ def analyse_one(args):
                 pass
 
         info = es.MetadataReader(filename=path, failOnError=False)()
-        bitrate = info[9] if len(info) > 9 else None
+        # `mf` and `header_dur` come from the truncation check above and are
+        # reused here rather than re-read. Must stay ahead of the MFCC block
+        # below, which rebinds `mf` to a list of frames.
+        bitrate = real_bitrate(path, mf, header_dur,
+                               info[9] if len(info) > 9 else None)
         grade, suspect = grade_quality(cutoff, bitrate)
 
         # Persist a compact feature vector for future similarity search.
@@ -315,9 +366,57 @@ def analyse_one(args):
         return fp, {"path": path, "error": f"{type(e).__name__}: {str(e)[:150]}"}
 
 
+def refresh_bitrate():
+    """Recompute bitrate_kbps and quality_suspect in place, no decoding.
+
+    A full re-analysis is 1-14 s/track and --force redoes everything, which
+    is a poor trade for one header field. This reads only the container
+    header, so the whole library takes seconds, and it is the repeatable
+    operation to reach for the next time a format lies about its bitrate.
+
+    Entries whose file has since moved are left exactly as they were: a
+    missing file is not evidence that the cached number is wrong.
+    """
+    if not os.path.exists(CACHE):
+        print(f"  no {CACHE}, nothing to refresh\n")
+        return
+    done = json.load(open(CACHE))
+
+    changed = gone = 0
+    for entry in done.values():
+        path = entry.get("path")
+        if entry.get("error") or not path:
+            continue
+        if not os.path.exists(path):
+            gone += 1
+            continue
+        before = entry.get("bitrate_kbps")
+        after = real_bitrate(path, essentia_kbps=before)
+        if after == before:
+            continue
+        entry["bitrate_kbps"] = after
+        # The grade is a function of the cutoff alone, so it cannot move --
+        # but `suspect` is a function of the bitrate and has to follow it.
+        _, entry["quality_suspect"] = grade_quality(
+            entry.get("spectral_cutoff_hz"), after)
+        changed += 1
+
+    json.dump(done, open(CACHE + ".tmp", "w"), indent=1)
+    os.replace(CACHE + ".tmp", CACHE)
+
+    ok = [v for v in done.values() if "error" not in v]
+    bogus = sum(1 for v in ok if (v.get("bitrate_kbps") or 0) <= 1)
+    print(f"  refreshed {changed} of {len(done)} entries, {gone} files missing")
+    print(f"  entries still at <= 1 kbps: {bogus}")
+    print("  suspect (claims high bitrate, spectrum says otherwise):",
+          sum(1 for v in ok if v.get("quality_suspect")), "\n")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("root", nargs="+")
+    # Optional, not required: --refresh-bitrate works off the cache alone and
+    # has no directory to walk.
+    ap.add_argument("root", nargs="*")
     # VibeNet loads its model per worker, so worker count is bounded by RAM,
     # not cores. Ten workers on a 13GB box drove this to 12GB and the OOM
     # killer took the run out repeatedly. Budget ~1.1GB per worker and leave
@@ -341,7 +440,15 @@ def main():
     ap.add_argument("-j", "--workers", type=int, default=_worker_default())
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--limit", type=int, help="analyse at most N new files")
+    ap.add_argument("--refresh-bitrate", action="store_true",
+                    help="recompute bitrate_kbps and quality_suspect for "
+                         "cached entries from the file header, no decoding")
     args = ap.parse_args()
+
+    if args.refresh_bitrate:
+        return refresh_bitrate()
+    if not args.root:
+        ap.error("a root directory is required unless --refresh-bitrate")
 
     fps = {}
     fpcache = os.path.join(HERE, "cache", "fingerprints.json")
