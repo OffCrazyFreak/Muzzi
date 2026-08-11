@@ -1044,8 +1044,8 @@ def main():
             stats["with_genre"] += 1
         try:
             dst = os.path.join(args.out, subdir_for(src, common_root), name)
+            lrc_path = os.path.splitext(dst)[0] + ".lrc"
             intended.add(os.path.realpath(dst))
-            intended.add(os.path.realpath(os.path.splitext(dst)[0] + ".lrc"))
             written_from.add(os.path.basename(src))
             trimmed = write_one(src, dst, ident, a, v, lyrics, extra,
                                 dry=args.dry_run, cut=cut, lrc_shift=lrc_shift)
@@ -1057,11 +1057,30 @@ def main():
                 stats["trim_failed"] = stats.get("trim_failed", 0) + 1
             # Sidecar .lrc as well: it is the most universally supported route
             # for synced lyrics on Android, and costs a couple of KB.
-            if synced and not args.dry_run and not args.no_lrc:
-                with open(os.path.splitext(dst)[0] + ".lrc", "w",
-                          encoding="utf-8") as fh:
+            #
+            # The path is claimed in `intended` only when the file is actually
+            # written. Claiming it unconditionally -- which is what this did --
+            # meant a sidecar we decided NOT to write was still protected from
+            # the prune sweep, so a stale one from an earlier run survived at
+            # exactly that path. Per AGENTS.md the sidecar is the only lyrics
+            # Samsung Music ever reads, so the rejected words were the ones
+            # winning on a primary target player. Deleting has to happen here:
+            # prune cannot do it, because prune only ever looks at what is
+            # missing from `intended`, and it exempts .lrc from the last-copy
+            # protection entirely.
+            if args.no_lrc or args.dry_run:
+                # Neither writing nor deleting. Claim the path anyway so a
+                # sidecar written by an earlier run survives the prune sweep:
+                # "skip writing" is what the flag says, not "clean up".
+                intended.add(os.path.realpath(lrc_path))
+            elif synced:
+                with open(lrc_path, "w", encoding="utf-8") as fh:
                     fh.write(synced)
+                intended.add(os.path.realpath(lrc_path))
                 stats["lrc_files"] = stats.get("lrc_files", 0) + 1
+            elif os.path.exists(lrc_path):
+                os.remove(lrc_path)
+                stats["lrc_removed"] = stats.get("lrc_removed", 0) + 1
         except Exception as e:
             stats["errors"] += 1
             print(f"  ERROR {os.path.basename(src)[:50]}: {type(e).__name__}: {e}")
@@ -1077,6 +1096,9 @@ def main():
     print(f"    with cover art                    {stats['with_art']:4}")
     print(f"    with genre                        {stats['with_genre']:4}")
     print(f"    synced .lrc sidecars              {stats.get('lrc_files', 0):4}")
+    if stats.get("lrc_removed"):
+        print(f"    stale .lrc removed                "
+              f"{stats['lrc_removed']:4}")
     print(f"    leading silence trimmed           {stats.get('trimmed', 0):4}")
     if stats.get("trim_failed"):
         print(f"      wanted but not cut              {stats['trim_failed']:4}")
