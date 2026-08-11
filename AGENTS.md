@@ -70,8 +70,46 @@ ruff check .                                   # what CI runs
 ```
 
 Every stage is idempotent and reads its own cache, so re-running costs nothing
-and is the normal way to work. There is no test suite: say so rather than
-implying a change is verified.
+and is the normal way to work.
+
+## Hit every surface
+
+The most common defect here is a change that works on the path you tested and
+is missing everywhere else. Before calling metadata work done, walk this list
+and say which entries applied:
+
+- **Containers.** m4a is a quarter of this library. The MP4 path has silently
+  written fewer tags than the MP3 path before, which took two playlists with
+  it. Freeform MP4 atoms also hold raw bytes, so `str()` on one gives `b'hr'`.
+- **Both carriers.** Lyrics are embedded *and* an `.lrc` sidecar. BPM is a tag
+  *and* part of the filename. Change one, change the other.
+- **Both playlist forms.** Relative M3U, and the `--absolute` variant.
+- **The reverse.** If a stage can add something, something has to be able to
+  remove it. `out/_all` is rebuilt, not appended to, which is why `write_tags`
+  reports leftovers and `--prune` exists. A one-way door is a bug.
+- **The review queue.** A new field that a human must confirm needs a column in
+  `review/`, a way to answer it, and a line in `hints.tsv`, or it is unusable.
+
+## Verifying
+
+Smallest proof that the change works: run the one stage you touched against a
+few files, and `ruff check .`. Do not run the whole pipeline to check one
+stage, and never run it against the real library.
+
+There is no test suite. Say which commands you ran, which you did not, and what
+is therefore still unproven. Never let a green `ruff` imply behaviour works.
+
+## Pull requests
+
+- Never open a PR unless asked.
+- Conventional title scoped to the stage: `fix(dedupe): keep the shorter copy`.
+- Body: the problem in a sentence or two, then how you fixed it, then the
+  support matrix if tags changed.
+- One concern per PR. If the description says "also", split it.
+- When babysitting: check for review comments newer than your last push, verify
+  each bot finding against the source rather than trusting it, fix the real
+  ones, and say plainly why you are dismissing the rest. Stay quiet when there
+  is nothing new. Stop when the bots are green on the latest commit.
 
 ## How I want you to work
 
