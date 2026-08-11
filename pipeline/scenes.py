@@ -20,6 +20,11 @@ about this library:
 
 Nothing here invents a genre. A track with no evidence gets no genre tag,
 because a blank field is better than a wrong one.
+
+Imported by the pipeline for genre_for(). Run directly, it reports what the
+ranking would decide for every track in cache/review.json and changes nothing.
+
+Usage: scenes.py
 """
 import json
 import os
@@ -282,7 +287,6 @@ def main():
     import argparse
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--report", action="store_true")
     ap.parse_args()
 
     from pipeline import artist_names
