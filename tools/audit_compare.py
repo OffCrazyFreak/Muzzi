@@ -10,6 +10,7 @@ Usage: audit_compare.py [--truth cache/audit_truth.json]
 """
 import argparse
 import json
+import math
 import os
 import re
 import statistics
@@ -75,9 +76,13 @@ def describe(errs, unit="LU"):
     if not errs:
         return "no data"
     a = sorted(abs(e) for e in errs)
+    # Nearest-rank percentiles. int(n*0.95) lands one rank high, which
+    # overstates the tail on exactly the reports this tool exists to settle.
+    def pctl(q):
+        return a[max(0, math.ceil(len(a) * q) - 1)]
     return (f"n={len(errs)} mean={statistics.mean(errs):+.2f} "
             f"median={statistics.median(errs):+.2f} "
-            f"|err| p50={a[len(a)//2]:.2f} p95={a[int(len(a)*.95)]:.2f} "
+            f"|err| p50={pctl(0.50):.2f} p95={pctl(0.95):.2f} "
             f"max={a[-1]:.2f} {unit}")
 
 
@@ -91,10 +96,23 @@ def main():
     truth = json.load(open(a.truth))
     cut = json.load(open(a.cutoff)) if os.path.exists(a.cutoff) else {}
     analysis = json.load(open("cache/analysis.json"))
-    by_src = {}
+    # MUZZI_SOURCE_FILE is a basename, so that is all there is to join on.
+    # Two source folders can hold the same filename, and keeping the last
+    # one seen would silently grade a file against another file's analysis.
+    # Ambiguous names are dropped instead: no cache entry beats a wrong one.
+    by_src, ambiguous = {}, set()
     for v in analysis.values():
-        if v.get("path"):
-            by_src[os.path.basename(v["path"])] = v
+        if not v.get("path"):
+            continue
+        name = os.path.basename(v["path"])
+        if name in by_src and by_src[name].get("path") != v["path"]:
+            ambiguous.add(name)
+        by_src[name] = v
+    for name in ambiguous:
+        by_src.pop(name, None)
+    if ambiguous:
+        print(f"  note: {len(ambiguous)} source filenames occur in more than "
+              f"one folder; those files are excluded from cache comparisons\n")
 
     rows = []
     for path, tr in truth.items():
@@ -190,6 +208,7 @@ def main():
     # ---------- quality ----------
     if cut:
         cut_err, grade_mismatch, tagcut_err = [], [], []
+        susp_mismatch, susp_checked = [], 0
         conf = Counter()
         for r in rows:
             c = r["cut"]
@@ -206,10 +225,25 @@ def main():
                     grade_mismatch.append(
                         (os.path.basename(r["path"]), tq, rq,
                          int(tc) if tc else None, rc))
+            # quality_suspect is cache-only -- no tag carries it -- and it is
+            # the field the bitrate feeds, so a bitrate regression shows up
+            # here and nowhere else. Grades alone would report all clear.
+            cs, rs = r["cache"].get("quality_suspect"), c.get("true_quality_suspect")
+            if r["cache"] and cs is not None and rs is not None:
+                susp_checked += 1
+                if bool(cs) != bool(rs):
+                    susp_mismatch.append(
+                        (os.path.basename(r["path"]), bool(cs), bool(rs),
+                         r["cache"].get("bitrate_kbps"), c.get("true_bitrate_kbps")))
         print("\nQUALITY")
         print("  tagged cutoff vs remeasured:", describe(tagcut_err, "Hz"))
         print("  grade mismatches           :",
               pct(len(grade_mismatch), sum(conf.values())))
+        print("  suspect-flag mismatches    :",
+              pct(len(susp_mismatch), susp_checked))
+        for m in susp_mismatch[:10]:
+            print(f"    {m[0][:46]:48s} cache={m[1]!s:5s} actual={m[2]!s:5s} "
+                  f"bitrate cache={m[3]} real={m[4]}")
         for k, v in conf.most_common():
             flag = "" if k[0] == k[1] else "   <-- mismatch"
             print(f"    tag={k[0]:8s} actual={k[1]:8s} {v}{flag}")
@@ -218,14 +252,24 @@ def main():
                   f"cutoff tag={m[3]} real={m[4]}")
         R["quality"] = {"cutoff": describe(tagcut_err, "Hz"),
                         "mismatches": len(grade_mismatch),
+                        "suspect_checked": susp_checked,
+                        "suspect_mismatches": len(susp_mismatch),
+                        "suspect_worst": susp_mismatch[:25],
                         "matrix": {f"{k[0]}->{k[1]}": v for k, v in conf.items()},
                         "worst": grade_mismatch[:25]}
 
     # ---------- youtube ----------
-    ts = json.load(open("cache/tagseed.json"))
+    # Guarded like every other cache read above. tagseed is not part of
+    # run.py and hint_youtube only exists once hints have been resolved, so
+    # a library that has never used either is normal, not an error.
+    def load(name):
+        path = os.path.join("cache", name)
+        return json.load(open(path)) if os.path.exists(path) else {}
+
+    ts = load("tagseed.json")
     seed_yt = {os.path.basename(k): v.get("youtube_id")
                for k, v in ts.items() if isinstance(v, dict) and v.get("youtube_id")}
-    hy = json.load(open("cache/hint_youtube.json"))
+    hy = load("hint_youtube.json")
     in_file, could, dur_mismatch, ok_dur = 0, 0, [], 0
     for r in rows:
         m = YT.search(r["tags"].get("_comment") or "")
