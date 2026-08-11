@@ -28,12 +28,17 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, HERE)
 CACHE = os.path.join(HERE, "cache", "analysis.json")
 FEATDIR = os.path.join(HERE, "features")
+AUDIT_TRUTH = os.path.join(HERE, "cache", "audit_truth.json")
+
+from pipeline import loudness  # noqa: E402
 
 # Camelot wheel. Harmonically compatible keys are adjacent numbers, or the
 # same number with the other letter. This is what makes "what can I mix into
@@ -286,7 +291,13 @@ def analyse_one(args):
             strength = max(st_ for k_, s_, st_, _ in key_votes
                            if (k_, s_) == (key, scale))
         dance = float(es.Danceability()(audio)[0])
-        loud = float(es.LoudnessEBUR128()(np.array([audio, audio]).T)[2])
+        # Loudness is the one measurement that does NOT come off the mono
+        # decode above. essentia's LoudnessEBUR128 only accepts stereo, and
+        # feeding it this mono signal duplicated into both channels read the
+        # library 0.76 dB quiet (sd 0.46) -- BS.1770 sums channel energies, so
+        # a downmix in both channels loses up to 3 dB on wide mixes. ffmpeg
+        # measures the real stereo file and returns true peak with it.
+        loud = loudness.ebur128(path)
         dyn = float(es.DynamicComplexity()(audio)[0])
         centroid = float(es.Centroid(range=22050)(es.Spectrum()(
             es.Windowing(type="hann")(audio[:2048]))))
@@ -353,7 +364,12 @@ def analyse_one(args):
             "header_secs": round(header_dur, 1) if header_dur else None,
             "danceability": round(dance, 3),
             "vibe": vibe or None,
-            "loudness_lufs": round(loud, 2),
+            "loudness_lufs": loud["loudness_lufs"],
+            "true_peak": loud["true_peak"],
+            # The invalidation marker this cache has never had: an entry
+            # without it was measured by the old mono path and is 0.76 dB out.
+            "loudness_method": loud["loudness_method"],
+            "loudness_error": loud["loudness_error"],
             "dynamic_complexity": round(dyn, 3),
             "brightness": round(centroid, 1),
             "spectral_cutoff_hz": round(cutoff) if cutoff else None,
@@ -412,10 +428,141 @@ def refresh_bitrate():
           sum(1 for v in ok if v.get("quality_suspect")), "\n")
 
 
+def _audit_truth_seed():
+    """-> {source basename: {loudness fields}} from a previous audit run.
+
+    audit_truth.py measures the OUTPUT files with the very ffmpeg command this
+    module now uses, so those numbers are already the answer -- and the output
+    is a byte copy of its source, so a measurement on one is valid for the
+    other. Joining them back saves decoding the library a second time, and it
+    is the only way to reach the tracks whose source folder no longer exists:
+    their output file is the last copy of that audio.
+
+    Joined on the MUZZI_SOURCE_FILE stamp, which is what write_tags.py put
+    there for exactly this kind of question. A basename claimed by two entries
+    is dropped rather than guessed at.
+    """
+    if not os.path.exists(AUDIT_TRUTH):
+        return {}
+    try:
+        truth = json.load(open(AUDIT_TRUTH))
+    except Exception:
+        return {}
+
+    import mutagen
+    seed, ambiguous = {}, set()
+    for rel, t in truth.items():
+        if t.get("true_lufs") is None or t.get("lufs_error"):
+            continue
+        path = rel if os.path.isabs(rel) else os.path.join(HERE, rel)
+        try:
+            m = mutagen.File(path)
+            tags = m.tags if m else None
+            if tags is None:
+                continue
+            if hasattr(tags, "getall"):
+                fr = tags.getall("TXXX:MUZZI_SOURCE_FILE")
+                src = str(fr[0].text[0]) if fr and fr[0].text else None
+            else:
+                v = tags.get("----:com.apple.iTunes:MUZZI_SOURCE_FILE")
+                src = bytes(v[0]).decode("utf-8", "ignore") if v else None
+        except Exception:
+            continue
+        if not src or src in ambiguous:
+            continue
+        if src in seed:
+            del seed[src]
+            ambiguous.add(src)
+            continue
+        pk = t.get("true_peak_db")
+        seed[src] = {
+            "loudness_lufs": round(float(t["true_lufs"]), 2),
+            "true_peak": (round(10 ** (float(pk) / 20.0), 6)
+                          if pk is not None else None),
+            "loudness_method": "ffmpeg-ebur128",
+            "loudness_error": None,
+        }
+    return seed
+
+
+def refresh_loudness(workers):
+    """Re-measure loudness and true peak for entries the old code wrote.
+
+    Every entry cached before ffmpeg took over carries a mono-downmix figure
+    that reads 0.76 dB quiet on average, and no peak at all -- so ReplayGain
+    computed from it is wrong and cannot be capped against clipping. Entries
+    already carrying `loudness_method` were measured the new way and are left
+    alone, which is what makes this safe to re-run.
+
+    Entries whose file has since moved are left exactly as they were: a
+    missing file is not evidence that the cached number is wrong.
+    """
+    if not os.path.exists(CACHE):
+        print(f"  no {CACHE}, nothing to refresh\n")
+        return
+    done = json.load(open(CACHE))
+
+    seed = _audit_truth_seed()
+    print(f"  {len(seed)} measurements available from {os.path.basename(AUDIT_TRUTH)}")
+
+    seeded = gone = 0
+    todo = []
+    for fp, entry in done.items():
+        path = entry.get("path")
+        if entry.get("error") or not path or entry.get("loudness_method"):
+            continue
+        hit = seed.get(os.path.basename(path))
+        if hit:
+            entry.update(hit)
+            seeded += 1
+            continue
+        if not os.path.exists(path):
+            gone += 1
+            continue
+        todo.append((fp, path))
+
+    print(f"  seeded {seeded}, {len(todo)} to measure, {gone} files missing, "
+          f"{workers} workers")
+
+    measured = 0
+    if todo:
+        t0 = time.time()
+        with ProcessPoolExecutor(max_workers=workers) as ex:
+            futures = {ex.submit(loudness.ebur128, p): fp for fp, p in todo}
+            for i, fut in enumerate(as_completed(futures), 1):
+                fp = futures[fut]
+                try:
+                    done[fp].update(fut.result())
+                    measured += 1
+                except Exception as e:
+                    done[fp]["loudness_error"] = f"{type(e).__name__}: {str(e)[:120]}"
+                if i % 50 == 0 or i == len(todo):
+                    el = time.time() - t0
+                    print(f"  {i}/{len(todo)}  {el:.0f}s elapsed, "
+                          f"eta {(len(todo)-i)*el/i:.0f}s", flush=True)
+                    json.dump(done, open(CACHE + ".tmp", "w"), indent=1)
+                    os.replace(CACHE + ".tmp", CACHE)
+
+    json.dump(done, open(CACHE + ".tmp", "w"), indent=1)
+    os.replace(CACHE + ".tmp", CACHE)
+
+    ok = [v for v in done.values() if "error" not in v]
+    stale = [v for v in ok if not v.get("loudness_method")]
+    failed = [v for v in ok if v.get("loudness_error")]
+    print(f"  refreshed {seeded + measured} of {len(done)} entries "
+          f"({seeded} seeded, {measured} measured)")
+    print(f"  entries still on the old mono measurement: {len(stale)}")
+    print(f"  entries with no true peak: "
+          f"{sum(1 for v in ok if v.get('true_peak') is None)}")
+    if failed:
+        print(f"  measurement errors: {len(failed)}")
+    print()
+
+
 def main():
     ap = argparse.ArgumentParser()
-    # Optional, not required: --refresh-bitrate works off the cache alone and
-    # has no directory to walk.
+    # Optional, not required: the --refresh-* modes work off the cache alone
+    # and have no directory to walk.
     ap.add_argument("root", nargs="*")
     # VibeNet loads its model per worker, so worker count is bounded by RAM,
     # not cores. Ten workers on a 13GB box drove this to 12GB and the OOM
@@ -443,12 +590,18 @@ def main():
     ap.add_argument("--refresh-bitrate", action="store_true",
                     help="recompute bitrate_kbps and quality_suspect for "
                          "cached entries from the file header, no decoding")
+    ap.add_argument("--refresh-loudness", action="store_true",
+                    help="re-measure loudness and true peak for cached "
+                         "entries written before ffmpeg took over")
     args = ap.parse_args()
 
     if args.refresh_bitrate:
         return refresh_bitrate()
+    if args.refresh_loudness:
+        return refresh_loudness(args.workers)
     if not args.root:
-        ap.error("a root directory is required unless --refresh-bitrate")
+        ap.error("a root directory is required unless --refresh-bitrate "
+                 "or --refresh-loudness")
 
     fps = {}
     fpcache = os.path.join(HERE, "cache", "fingerprints.json")

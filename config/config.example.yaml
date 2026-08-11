@@ -71,7 +71,6 @@ plugins: >
     fetchart
     embedart
     lyrics
-    replaygain
     scrub
     types
     duplicates
@@ -131,12 +130,12 @@ lyrics:
     fallback: ''
     dist_thresh: 0.11
 
-replaygain:
-    auto: yes
-    backend: ffmpeg     # no compile needed; ffmpeg has ebur128
-    threads: 10
-    overwrite: no
-    targetlevel: 89
+# ReplayGain is NOT beets' job here. write_tags.py is the single source of
+# truth for loudness: it tags from the pipeline's own ffmpeg ebur128
+# measurement, at -14 LUFS, with a true peak and a -1 dBTP clipping cap.
+# beets wrote its own values at a different reference and no peak at all, so
+# whichever ran last won -- and `scrub: auto` below would strip the MUZZI_*
+# provenance stamps on the way past. The plugin is left out of the list above.
 
 scrub:
     auto: yes           # strip junk/encoder cruft before writing clean tags

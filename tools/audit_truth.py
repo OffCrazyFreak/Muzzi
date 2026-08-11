@@ -13,11 +13,16 @@ import argparse
 import concurrent.futures as cf
 import json
 import os
-import re
 import subprocess
+import sys
 
-_I = re.compile(r"^\s*I:\s*(-?[\d.]+)\s*LUFS", re.M)
-_PEAK = re.compile(r"Peak:\s*(-?[\d.]+)\s*dBFS")
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, HERE)
+
+# The same measurement the analysis stage tags from. Imported, never copied:
+# a copy that drifts from the original is how the AAC bitrate bug survived,
+# and this one is the ground truth every written tag is graded against.
+from pipeline.loudness import measure as _ebur128  # noqa: E402
 
 
 def probe(path):
@@ -56,28 +61,6 @@ def probe(path):
         "sample_rate": num(st.get("sample_rate"), int),
         "channels": num(st.get("channels"), int),
     }
-
-
-def _ebur128(path, pre=""):
-    cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-i", path, "-af",
-           pre + "ebur128=peak=true", "-f", "null", "-"]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900,
-                           check=False)
-    except Exception as e:
-        return None, None, f"{type(e).__name__}: {str(e)[:120]}", 0
-    err = r.stderr or ""
-    bad = len(re.findall(r"Header missing|Error while decoding", err))
-    # A non-zero exit means ffmpeg stopped early, so any integrated loudness
-    # it printed covers the decoded prefix, not the file. This is ground
-    # truth other numbers are graded against, and a partial measurement
-    # presented as whole-file loudness is worse than no measurement at all:
-    # it would be silently compared against the tag as if it were valid.
-    if r.returncode != 0:
-        return None, None, f"ffmpeg exit {r.returncode}: {err.strip()[-120:]}", bad
-    mi, mp = _I.search(err), _PEAK.findall(err)
-    return (float(mi.group(1)) if mi else None,
-            float(mp[-1]) if mp else None, None, bad)
 
 
 def loudness(path):

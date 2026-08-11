@@ -228,7 +228,7 @@ can't be wrong about which file it's describing:
 
 | Stage | Produces |
 |---|---|
-| `analyze` | BPM (three engines), musical key -> Camelot, loudness, danceability, spectral cutoff |
+| `analyze` | BPM (three engines), musical key -> Camelot, loudness and true peak (ffmpeg EBU R128), danceability, spectral cutoff |
 | `dedupe` | files whose fingerprints match: the same recording twice |
 | `silence` | how much dead air each file opens with, and whether it is safe to cut. Measures the *source*, so the figure never changes and trimming can never happen twice |
 | `verify_lyrics` | Whisper transcribes the audio and compares it to the fetched lyrics -- independent proof the file is the song we think, plus language detection |
@@ -345,6 +345,53 @@ publishing one is publishing a track listing. Copy
 ---
 
 ## Design notes worth knowing
+
+**ReplayGain, and why -14 LUFS.** These files span **24 dB** of loudness, from
+-27.3 to -3.4 LUFS, median -9.7. That is what an un-normalized library sounds
+like: `yt-dlp` fetches YouTube's original audio, and YouTube's own -14 LUFS
+normalization is applied at playback and never written into the file. Without
+ReplayGain, one track arrives at a comfortable level and the next is inaudible.
+
+Every file therefore gets `REPLAYGAIN_TRACK_GAIN` and `REPLAYGAIN_TRACK_PEAK`,
+plus album equivalents where an album is known, plus
+`REPLAYGAIN_REFERENCE_LOUDNESS` so a later retag can tell which target produced
+the numbers. The reference is **-14 LUFS**, not the ReplayGain 2.0 default of
+-18. -18 was calibrated in 2001 against pre-loudness-war masters; against a
+library whose median is -9.7 LUFS it attenuates almost everything by 8-9 dB.
+Namida applies gain as a plain volume multiplier, so -18 LUFS puts the median
+track at 35% of the volume slider. -14 puts it at 55%, and matches what
+Spotify, YouTube, TIDAL and Amazon normalize to.
+
+Gain is capped so the true peak after it cannot exceed **-1 dBTP** (EBU R128,
+the same thing loudgain's `-k` does). This matters more at -14 than at -18:
+lossy decoding routinely overshoots full scale here, peaks of 1.2 to 1.5 are
+ordinary, and without the cap 80 files would clip outright.
+
+Support matrix, per the rule in AGENTS.md:
+
+| Player | What it does with these tags |
+|---|---|
+| **Namida** | Reads `REPLAYGAIN_TRACK_GAIN` in either case, on ID3 and MP4 alike, and prefers track gain over album gain. Applies it as a volume multiplier clamped to 1.0 on mobile and 1.3 on desktop. Ignores the peak tags. **On Android its default mode is `loudness_enhancer`, which uses an effect that can only amplify -- and 97% of these gains are negative, so it does nothing. Set ReplayGain to `volume` instead.** |
+| **Samsung Music** | Ignores ReplayGain entirely. Harmless: it plays the file as it is, which is what it did before. |
+| Generic Android (Poweramp, Musicolet, Retro Music, Symfonium, AIMP) | Symfonium and Poweramp honour the standard tags; the rest ignore them and play unchanged. Nothing depends on any of them. |
+| VLC, foobar2000, mpv | Read the uppercase spelling, which is what is written. |
+| Kodi, IDJC | Read **only** the lowercase spelling and will not see these. Known and accepted: neither is a target player. |
+
+Uppercase is the ReplayGain 2.0 spelling and what loudgain writes by default,
+so it is what is written here. FLAC and Ogg treat the name case-insensitively
+and are unaffected either way.
+
+**Loudness is measured by ffmpeg, not Essentia.** Every other measurement in
+`analyze` comes off one mono Essentia decode. Loudness does not, for two
+reasons. Essentia's `LoudnessEBUR128` only accepts a stereo signal, and handing
+it the mono decode duplicated into both channels read this library **0.76 dB
+quiet, sd 0.46** -- BS.1770 sums channel energies, so a downmix in both
+channels loses up to 3 dB on wide mixes. And Essentia's `TruePeakDetector`
+costs **13.3 s/track** against 15.5 s for the entire rest of the analysis,
+while ffmpeg returns loudness and true peak together in about 1.9 s.
+`pipeline/loudness.py` is that one measurement, imported by both `analyze.py`
+and `tools/audit_truth.py` so the pipeline and the tool that grades it cannot
+drift apart.
 
 **BPM.** Three engines vote (Essentia RhythmExtractor2013 multifeature, degara,
 PercivalBpmEstimator). Validated 20/20 within 4% against published values for
@@ -653,6 +700,16 @@ Count what comes back rather than the exit code. `audit_compare` reports the
 files it could not measure before any mismatch line, because a run where
 everything failed otherwise reads as a run where nothing was wrong.
 
+`audit_truth.py` imports its loudness measurement from `pipeline/loudness.py`
+for the same reason: it is the same ffmpeg call the analysis stage tags from,
+so the audit checks a number rather than comparing two independent guesses at
+it.
+
+`verify.py` covers the cheap half of this. It reads tags only, so it cannot
+tell whether a value matches the audio, but it fails the run when a file has no
+`REPLAYGAIN_TRACK_GAIN` or carries an implausible one, and it reports how many
+files lack a peak or name a different reference loudness.
+
 If a container is found to misreport its bitrate, correct the cache without a
 full re-analysis. Header only, no decoding, seconds rather than hours:
 
@@ -661,6 +718,21 @@ full re-analysis. Header only, no decoding, seconds rather than hours:
 ```
 
 `dedupe` consumes `bitrate_kbps`, so run this before any later dedupe.
+
+The same shape exists for loudness, for entries cached before ffmpeg took over
+the measurement:
+
+```bash
+pipeline/analyze.py --refresh-loudness  # re-measures loudness + true peak
+```
+
+It skips any entry that already carries `loudness_method`, so it is safe to
+re-run, and it seeds from `cache/audit_truth.json` wherever a previous audit
+already measured the output file with the identical ffmpeg command -- which
+costs nothing and is the only way to reach tracks whose source folder has since
+been deleted. `write_tags` consumes `loudness_lufs` and `true_peak`, so run
+this before any later retag or every peak tag and clipping cap silently
+does nothing.
 
 ---
 

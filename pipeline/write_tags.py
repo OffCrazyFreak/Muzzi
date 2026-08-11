@@ -20,6 +20,7 @@ Usage: write_tags.py [--min-confidence 0.90] [--out DIR] [--dry-run]
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -68,10 +69,71 @@ MIN_LRC_SHIFT = 0.15
 # on every run from float noise in the cached figure.
 TRIM_EPSILON = 0.005
 
-# ReplayGain 2.0 reference loudness. gain = target - measured.
-RG_TARGET_LUFS = -18.0
+# Reference loudness. gain = target - measured.
+#
+# Deliberately NOT the ReplayGain 2.0 default of -18 LUFS. That figure was
+# calibrated in 2001 against pre-loudness-war masters; this library's median
+# track is -9.7 LUFS, so -18 attenuates almost everything by 8-9 dB. Namida,
+# the player this output is aimed at, applies ReplayGain as a plain volume
+# multiplier -- 10^(gain/20), clamped to 1.0 on mobile and 1.3 on desktop --
+# so -18 LUFS puts the median track at 35% of the volume slider. -14 LUFS is
+# where Spotify, YouTube, TIDAL and Amazon all landed, and puts it at 55%.
+RG_TARGET_LUFS = -14.0
+
+# Ceiling for true peak after gain, per EBU R128 and loudgain's -k. A higher
+# target boosts more tracks, and lossy decoding already overshoots full scale
+# (peaks of 1.2-1.5 are ordinary here), so without this 80 files in this
+# library would clip outright.
+RG_MAX_TRUE_PEAK_DBTP = -1.0
 
 _BAD = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+# Every ReplayGain-ish tag name a previous build, an upstream tagger or Apple
+# might have left behind, matched case-insensitively. These are deleted before
+# ours are written: two schemes disagreeing inside one file is worse than
+# either alone, and ten files here carry a lowercase replaygain_track_gain
+# whose value is the literal string "eplaygain", which a player that reads
+# lowercase first will happily parse as garbage.
+_RG_PREFIXES = ("REPLAYGAIN_", "MP3GAIN_")
+_RG_EXACT = ("ITUNNORM",)
+
+
+def _is_rg_tag(name):
+    n = (name or "").upper().split(":")[-1]
+    return n.startswith(_RG_PREFIXES) or n in _RG_EXACT
+
+
+def rg_gain(loudness_lufs, true_peak=None, target=RG_TARGET_LUFS):
+    """ReplayGain for one measured loudness, capped so it cannot clip.
+
+    `true_peak` is linear, 1.0 = 0 dBFS, as ReplayGain peak tags are. Without
+    it there is nothing to cap against, so the raw gain is returned and the
+    caller writes no peak tag -- which is honest: a player then knows it has
+    no clipping information rather than being handed a fabricated peak.
+    """
+    if loudness_lufs is None:
+        return None
+    gain = target - float(loudness_lufs)
+    if true_peak and float(true_peak) > 0:
+        headroom = RG_MAX_TRUE_PEAK_DBTP - 20 * math.log10(float(true_peak))
+        gain = min(gain, headroom)
+    return gain
+
+
+def album_loudness(tracks):
+    """Duration-weighted album loudness, in the energy domain. -> LUFS.
+
+    Averaging LUFS values directly averages logarithms, which by Jensen's
+    inequality reads quieter than the album actually is and yields an album
+    gain a few tenths too loud -- on a two-track -6/-20 LUFS album, 4.2 dB
+    too loud. Proper ReplayGain measures the concatenated album; summing
+    energy per second is the same quantity without a second decode.
+
+    `tracks` is [(loudness_lufs, seconds), ...].
+    """
+    total = sum(w for _, w in tracks) or 1.0
+    energy = sum(10 ** (float(l) / 10.0) * float(w) for l, w in tracks) / total
+    return 10.0 * math.log10(energy) if energy > 0 else None
 
 # Source folders that should share one output folder.
 FOLDER_ALIASES = {
@@ -428,6 +490,11 @@ def write_generic(dst, fields, art_path, lyrics):
         raise ValueError("unrecognised audio container")
 
     if isinstance(f, MP4):
+        # Same reasoning as the MP3 path: drop every capitalisation of any
+        # ReplayGain atom already present, plus Apple's own Sound Check, before
+        # writing ours. The loop below only overwrites the names it produces.
+        for k in [k for k in f.keys() if _is_rg_tag(k)]:
+            f.pop(k, None)
         m = {"title": "\xa9nam", "artist": "\xa9ART", "albumartist": "aART",
              "album": "\xa9alb", "date": "\xa9day", "genre": "\xa9gen",
              "bpm": "tmpo"}
@@ -514,8 +581,8 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
                 ident.get("title"), ident.get("year"),
                 extra.get("discogs_styles"), primary)
             primary = chosen or primary
-        gain = (RG_TARGET_LUFS - float(audio["loudness_lufs"])
-                if audio.get("loudness_lufs") is not None else None)
+        peak = audio.get("true_peak")
+        gain = rg_gain(audio.get("loudness_lufs"), peak)
         write_generic(dst, {
             "title": (ident or {}).get("display_title"),
             "artist": "; ".join(ident["all_artists"]) if ident else None,
@@ -530,6 +597,18 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
             "initialkey": audio.get("camelot"),
             "camelot": audio.get("camelot"),
             "replaygain_track_gain": f"{gain:.2f} dB" if gain is not None else None,
+            "replaygain_track_peak": f"{float(peak):.6f}" if peak else None,
+            # Album gain and peak used to be MP3-only: this branch returns
+            # before the album block further down ever runs, so all 250 m4a
+            # files carried no album levels at all, and a player set to album
+            # mode fell back to nothing on a quarter of the library.
+            "replaygain_album_gain": (f"{extra['album_gain']:.2f} dB"
+                                      if extra.get("album_gain") is not None
+                                      else None),
+            "replaygain_album_peak": (f"{float(extra['album_peak']):.6f}"
+                                      if extra.get("album_peak") else None),
+            "replaygain_reference_loudness": (f"{RG_TARGET_LUFS:.2f} LUFS"
+                                              if gain is not None else None),
             # The same provenance and audio facts the MP3 path writes. Without
             # them a quarter of the library (the m4a quarter) carried no
             # QUALITY and no MUZZI_SOURCE, so it could never appear in the
@@ -652,14 +731,39 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
     txxx("SPECTRAL_CUTOFF_HZ", audio.get("spectral_cutoff_hz"))
     txxx("DYNAMIC_COMPLEXITY", audio.get("dynamic_complexity"))
     if audio.get("loudness_lufs") is not None:
-        gain = RG_TARGET_LUFS - float(audio["loudness_lufs"])
+        # txxx() overwrites but never deletes, and dst is not re-copied when it
+        # already exists, so anything a previous build or an upstream tagger
+        # wrote outlives us unless it is removed by name. RVA2 goes too: it is
+        # the other ID3 way to say the same thing, and mp3gain and Quod Libet
+        # read it in preference to TXXX.
+        for frame in list(t.getall("TXXX")):
+            if _is_rg_tag(frame.desc):
+                t.delall(f"TXXX:{frame.desc}")
+        t.delall("RVA2")
+        # Apple writes Sound Check as a COMM frame, not TXXX, so the loop above
+        # walks straight past it -- 23 files here carried one and kept it.
+        # Leaving it means two normalisation schemes in one file disagreeing.
+        for frame in list(t.getall("COMM")):
+            if _is_rg_tag(frame.desc):
+                t.delall(frame.HashKey)
+
+        peak = audio.get("true_peak")
+        gain = rg_gain(audio["loudness_lufs"], peak)
         txxx("REPLAYGAIN_TRACK_GAIN", f"{gain:.2f} dB")
+        if peak:
+            txxx("REPLAYGAIN_TRACK_PEAK", f"{float(peak):.6f}")
+        # Nothing in the file recorded which target produced the gain, so a
+        # later retag could not tell -14 LUFS values from -18 LUFS ones.
+        txxx("REPLAYGAIN_REFERENCE_LOUDNESS", f"{RG_TARGET_LUFS:.2f} LUFS")
         txxx("LOUDNESS_LUFS", audio["loudness_lufs"])
         # Album gain keeps relative levels WITHIN an album intact, so a quiet
         # interlude stays quiet instead of being pushed up to match the singles.
         # Track gain alone flattens that out.
         if extra.get("album_gain") is not None:
             txxx("REPLAYGAIN_ALBUM_GAIN", f"{extra['album_gain']:.2f} dB")
+            if extra.get("album_peak"):
+                txxx("REPLAYGAIN_ALBUM_PEAK",
+                     f"{float(extra['album_peak']):.6f}")
 
     # ---- language ----
     lang, lang_conf = resolve_language(verified, lyrics)
@@ -914,9 +1018,10 @@ def main():
     sil = json.load(open(SILENCE)) if os.path.exists(SILENCE) else {}
     align = json.load(open(ALIGN)) if os.path.exists(ALIGN) else {}
 
-    # Album loudness = duration-weighted mean of its tracks' loudness. Proper
-    # ReplayGain measures the concatenated album; this is within a few tenths
-    # of a dB and needs no second decode pass.
+    # Album loudness, energy-weighted by duration -- see album_loudness().
+    # Album peak is the loudest peak anywhere on the album, because one hot
+    # track has to constrain the whole album's gain or the relative levels
+    # album gain exists to preserve get broken again by the clipping cap.
     album_pool = {}
     for r in rows:
         alb = r.get("proposed_album")
@@ -924,14 +1029,26 @@ def main():
         if alb and a.get("loudness_lufs") is not None:
             key = f'{r.get("proposed_artist")}|{alb}'.lower()
             album_pool.setdefault(key, []).append(
-                (float(a["loudness_lufs"]), float(a.get("decoded_secs") or 1)))
-    album_gain = {}
+                (float(a["loudness_lufs"]), float(a.get("decoded_secs") or 1),
+                 a.get("true_peak")))
+    album_gain, album_peak = {}, {}
     for key, vals in album_pool.items():
         if len(vals) < 2:
             continue
-        total = sum(w for _, w in vals) or 1
-        mean = sum(l * w for l, w in vals) / total
-        album_gain[key] = RG_TARGET_LUFS - mean
+        mean = album_loudness([(l, w) for l, w, _ in vals])
+        if mean is None:
+            continue
+        # One track without a peak means the album's true maximum is unknown,
+        # and a max over the rest would understate it. Better no album peak
+        # than one that licenses a gain the missing track cannot survive.
+        peaks = [p for _, _, p in vals if p]
+        peak = max(peaks) if len(peaks) == len(vals) else None
+        gain = rg_gain(mean, peak)
+        if gain is None:
+            continue
+        album_gain[key] = gain
+        if peak:
+            album_peak[key] = peak
 
     # Deepest directory every source shares. Paths are mirrored relative to it,
     # so "<...>/Music library from phone/Music Mine/x.mp3" becomes
@@ -1144,8 +1261,9 @@ def main():
         if lyric_reason:
             extra["lyric_reason"] = lyric_reason
         if trusted and r.get("proposed_album"):
-            extra["album_gain"] = album_gain.get(
-                f'{r.get("proposed_artist")}|{r["proposed_album"]}'.lower())
+            akey = f'{r.get("proposed_artist")}|{r["proposed_album"]}'.lower()
+            extra["album_gain"] = album_gain.get(akey)
+            extra["album_peak"] = album_peak.get(akey)
         if extra.get("art_path"):
             stats["with_art"] += 1
         if extra.get("genres"):
