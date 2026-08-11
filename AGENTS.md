@@ -117,6 +117,34 @@ Stages are idempotent and cache-backed, so re-running is the normal way to
 work. It is not free: new files, an emptied cache and previously failed
 requests all still cost time.
 
+## The shared library is not yours
+
+Several sessions work on this repository at once, each in its own worktree
+under `.claude/worktrees/`. The branches are isolated. The library is not.
+
+`cache/`, `out/`, `review/`, `features/`, `redownloaded/`, `models/`,
+`hints.tsv`, `.venv/` and `bin/` are gitignored, so a worktree never gets its
+own copy. There is exactly one of each, in the main checkout at the repository
+root, and every session sees the same files. Nothing about them is
+branch-scoped, and git will not warn you, because git is not watching them.
+
+- **Never run anything with the main checkout as the working directory**, and
+  never pass paths that resolve into it. `pipeline/*.py` derives its paths from
+  the file's own location, so it stays inside your worktree; a bare
+  `out/_all` or `cache/analysis.json` argument does not, and lands on the real
+  library instead.
+- **Never regenerate a shared cache file to test a change.** Rewriting
+  `analysis.json` while another session is testing `dedupe` makes both sets of
+  results unattributable, and `dedupe` picks which copy of a song to keep from
+  exactly that file.
+- **Read-only is fine.** Copy what you need into your worktree and work on the
+  copy. Data flows in, never back out.
+- **Never delete or prune shared state** to get a clean run. Someone else is
+  mid-run in it.
+
+If your change needs pipeline output to prove it works, build that output from
+a handful of files inside your own worktree.
+
 ## Hit every surface
 
 The most common defect here is a change that works on the path you tested and
