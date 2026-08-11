@@ -5,6 +5,8 @@ before a large PR saves us both the wasted work.
 
 ## Setup
 
+Python 3.11 to 3.14. The pins were verified on 3.12.
+
 ```bash
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt

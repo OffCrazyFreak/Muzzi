@@ -28,7 +28,11 @@ beautifulsoup4==4.15.0
 requests-oauthlib==2.0.0
 requests-ratelimiter==0.10.0
 
-# ------------------------------------------------------------------ optional
+# ----------------------------------------------- not needed by every pipeline
+# Installed by the line above, deliberately: this file is the whole install,
+# and both are small. Neither is imported at module level, so the pipeline
+# still runs if you strip them out of your own copy.
+#
 # vibenet: mood and danceability. analyze.py loads it in a try/except and
 # degrades silently without it.
 vibenet==0.1.0

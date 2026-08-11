@@ -2,14 +2,17 @@
 
 ## Reporting a vulnerability
 
-Use GitHub's [private vulnerability reporting](https://github.com/OffCrazyFreak/Muzzi/security/advisories/new).
-Do not open a public issue for anything exploitable. Expect a first reply
-within a week.
+Use GitHub's [private vulnerability reporting][report]. Do not open a public
+issue for anything exploitable. Expect a first reply within a week.
+
+[report]: https://github.com/OffCrazyFreak/Muzzi/security/advisories/new
 
 ## Scope
 
-Muzzi runs locally and serves no network traffic, so the interesting surface is
-credentials and the files it writes:
+Muzzi runs locally and listens on nothing. It does make outbound requests, to
+AcoustID, MusicBrainz, Discogs, Last.fm, Genius, Deezer, iTunes, LRCLIB, Cover
+Art Archive and YouTube. So the interesting surface is the credentials those
+need, and the files Muzzi writes:
 
 - **API keys.** `config/secrets.json` and `config/config.yaml` hold AcoustID,
   Discogs, Last.fm and Genius tokens. Both are gitignored; the committed

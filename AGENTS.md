@@ -37,8 +37,10 @@ Music offline, stock OEM players) must still work. Not everyone uses Namida.
 
 ## Never
 
-- Write to a source folder. Sources are read-only; every stage writes to
-  `cache/`, and only `write_tags` writes audio, as copies into `out/_all`.
+- Write to a source folder. Sources are read-only. Stages write to `cache/`,
+  `review` writes the spreadsheets in `review/`, `export` writes
+  `out/playlists/`, and only `write_tags` writes audio, as copies into
+  `out/_all`. Nothing else writes anywhere.
 - Commit `hints.tsv`, `review/`, `cache/`, `out/`, `config/secrets.json`,
   `config/config.yaml`, or any audio, artwork or lyrics. They describe a
   personal library and are gitignored.
@@ -63,14 +65,15 @@ Ask means ask. Do not quietly work around the question.
 ## Commands
 
 ```bash
-./.venv/bin/python run.py "/path/to/music"     # whole pipeline
-run.py DIR --dry-run                           # print the plan, do nothing
-run.py DIR --from webmatch --skip verify_lyrics
-ruff check .                                   # what CI runs
+./.venv/bin/python run.py "/path/to/music"
+./.venv/bin/python run.py DIR --dry-run          # print the plan, do nothing
+./.venv/bin/python run.py DIR --from webmatch --skip verify_lyrics
+ruff check .                                     # what CI runs
 ```
 
-Every stage is idempotent and reads its own cache, so re-running costs nothing
-and is the normal way to work.
+Stages are idempotent and cache-backed, so re-running is the normal way to
+work. It is not free: new files, an emptied cache and previously failed
+requests all still cost time.
 
 ## Hit every surface
 
@@ -124,7 +127,7 @@ is therefore still unproven. Never let a green `ruff` imply behaviour works.
   Never to verify your own work.
 - Never use em dashes or en dashes, anywhere: chat, code comments, docs, commit
   messages, PR text. Use a comma, a colon, parentheses, or rewrite the line.
-- Markdown here is hard-wrapped at 78 columns. Match it, do not reflow a file
+- Markdown here is hard-wrapped at 79 columns. Match it, do not reflow a file
   you are editing.
 - Conventional commits scoped to the stage: `fix(dedupe): ...`. Say what
   changed, then why.

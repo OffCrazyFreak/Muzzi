@@ -57,7 +57,9 @@ That is why:
 
 ## Requirements
 
-- Linux (developed on Mint), Python 3.9+
+- Linux (developed on Mint), Python 3.11 to 3.14. The pins in
+  `requirements.txt` set the floor (numpy needs 3.11) and the ceiling (beets
+  needs below 3.15). Built and verified on 3.12.
 - `ffmpeg`, `yt-dlp`
 - Node 22+ or Deno 2.3+, only for age-restricted YouTube videos: yt-dlp needs a
   JavaScript runtime to solve their challenge (`--js-runtimes node`, plus the

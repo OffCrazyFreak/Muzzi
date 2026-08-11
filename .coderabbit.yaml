@@ -13,14 +13,18 @@ reviews:
         Stages are idempotent and cache-backed: a re-run must do only what is
         missing. Flag anything that rewrites an existing cache entry, caches a
         failed request as a real answer, or keys a cache on a truncated
-        fingerprint. Source audio is read-only; flag any write outside out/.
+        fingerprint. Source audio is read-only: flag any write back to a source
+        folder, and any audio written outside out/_all. Writes to cache/,
+        review/ and out/playlists/ are expected.
         Essentia must never run in a thread or across a fork.
     - path: "pipeline/write_tags.py"
       instructions: >-
         Tags must work on Namida and Samsung Music both, and degrade for other
-        Android players. Flag single-player features, non-standard ID3 frames
-        where a standard one exists, and any path where m4a gets fewer tags
-        than mp3.
+        Android players. A field only Namida reads is fine when it ships with a
+        fallback every player reads (embedded lyrics plus an .lrc sidecar, a
+        BPM tag plus BPM in the filename); flag it when that fallback is
+        missing. Flag non-standard ID3 frames where a standard one exists, and
+        any path where m4a gets fewer tags than mp3.
     - path: "**/*.md"
       instructions: >-
         No em dashes or en dashes. Flag any claim about player behaviour that
