@@ -46,8 +46,18 @@ and `bin/fpcalc`, then run against a copy of a few files:
 ## Commits and PRs
 
 Conventional commits, scoped to the pipeline stage:
-`feat(lyrics): ...`, `fix(dedupe): ...`, `docs(readme): ...`.
 
-Write what changed, then why. The why is the part worth reading in a year, and
-this repository's history is full of decisions that look arbitrary without it.
-One PR does one thing.
+```text
+type(scope): Short summary in imperative mood
+
+Changes:
+- Specific change
+
+Brief explanation of why the change was needed.
+```
+
+The why is the part worth reading in a year, and this repository's history is
+full of decisions that look arbitrary without it. One PR does one thing. See
+`AGENTS.md` for the full list of types and scopes.
+
+No em dashes or en dashes in Markdown. CI fails on them.
