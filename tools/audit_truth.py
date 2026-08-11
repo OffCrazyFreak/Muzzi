@@ -92,11 +92,18 @@ def loudness(path):
     the whole corpus rather than on the one file it was spotted on.
     """
     i, pk, err, bad = _ebur128(path)
-    mi, _, _, _ = _ebur128(path, "aresample=44100,aformat=channel_layouts=mono,")
+    # The mono pass has its own failure mode -- it adds a resample and a
+    # channel-layout conversion the stereo pass does not run. Dropping its
+    # error would leave mono_lufs empty with nothing saying why, and that
+    # column is the whole basis of the mono-downmix comparison.
+    mi, _, mono_err, _ = _ebur128(
+        path, "aresample=44100,aformat=channel_layouts=mono,")
     out = {"true_lufs": i, "true_peak_db": pk, "mono_lufs": mi,
            "decode_errors": bad}
     if err:
         out["lufs_error"] = err
+    if mono_err:
+        out["mono_lufs_error"] = mono_err
     return out
 
 
