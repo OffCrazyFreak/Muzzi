@@ -111,7 +111,10 @@ _FEAT = re.compile(r"\s*(?:\(|\[)?\s*\b(?:feat|ft|featuring)\b\.?\s+.*$", re.I)
 # which folds to "meduvremenu" where the true spelling gives "medjuvremenu".
 # If eth-for-d ever becomes common, fix the filenames, not this table.
 _UNDECOMPOSED = str.maketrans({
-    "đ": "dj", "Đ": "DJ",   # d with stroke, Serbian/Croatian -> "dj"
+    # Title case, not "DJ": norm() lowercases anyway, but lyrics_fetch reuses
+    # this table to build search strings a human might have typed, and nobody
+    # types "DJordje".
+    "đ": "dj", "Đ": "Dj",   # d with stroke, Serbian/Croatian -> "dj"
     "ð": "d", "Ð": "D",     # eth, Icelandic
     "ł": "l", "Ł": "L",     # l with stroke, Polish
     "ø": "o", "Ø": "O",     # o with stroke, Norwegian/Danish
