@@ -178,6 +178,39 @@ def main():
         if st and max(st) > g["decoded_secs"]:
             past_end += 1
 
+    # What the write stage would actually do with this cache. Grading the
+    # cache alone measures the problem; this measures the fix, because the
+    # gates live at write time and a bad entry that never reaches a file is
+    # not a bad sidecar. Imports the real gates rather than restating them,
+    # so the audit cannot drift into grading rules the pipeline stopped using.
+    from pipeline.write_tags import lyrics_trustworthy, lyrics_timing_ok
+    verified = {}
+    vpath = os.path.join(CACHE, "lyric_verify.json")
+    if os.path.exists(vpath):
+        verified = {v.get("path"): v for v in json.load(open(vpath)).values()
+                    if isinstance(v, dict) and v.get("path")}
+    written, withheld = {"synced": 0, "plain": 0, "none": 0}, {}
+    for g in graded.values():
+        e = lyr.get(g["key"])
+        if not isinstance(e, dict) or not (e.get("synced") or e.get("plain")):
+            continue
+        artist, _, title = g["key"].rpartition("|")
+        v = verified.get(g["path"])
+        ok, why = lyrics_trustworthy(e, v, artist, title)
+        if not ok:
+            written["none"] += 1
+            withheld[why] = withheld.get(why, 0) + 1
+            continue
+        if not e.get("synced"):
+            written["plain"] += 1
+            continue
+        ok, why = lyrics_timing_ok(e, g["decoded_secs"])
+        if ok:
+            written["synced"] += 1
+        else:
+            written["plain"] += 1
+            withheld[why] = withheld.get(why, 0) + 1
+
     syn = [g for g in graded.values() if g["synced"]]
     deltas = [abs(g["delta"]) for g in syn if g["delta"] is not None]
     checks = {
@@ -219,6 +252,8 @@ def main():
             "over_gate_pct_balkan": share(bal, args.gate),
             "over_gate_pct_other": share(oth, args.gate),
         },
+        "would_write": written,
+        "withheld_by_reason": withheld,
         "selector_versions": {},
     }
     for g in graded.values():
@@ -244,6 +279,14 @@ def main():
     print(f"    lyrics late  (file shorter)    {t['late_lyrics_file_shorter']:5}")
     print(f"    over gate, balkan / other      "
           f"{t['over_gate_pct_balkan']}% / {t['over_gate_pct_other']}%")
+    print("\n  what write_tags would produce from this cache")
+    print(f"    synced .lrc sidecar            {written['synced']:5}")
+    print(f"    plain lyrics only              {written['plain']:5}")
+    print(f"    no lyrics                      {written['none']:5}")
+    if withheld:
+        print("    withheld, by reason")
+        for k, v in sorted(withheld.items(), key=lambda kv: -kv[1]):
+            print(f"      {k:28} {v:5}")
     print(f"\n  selector versions {report['selector_versions']}")
     print(f"\n  wrote {args.out}\n")
     if args.json:
