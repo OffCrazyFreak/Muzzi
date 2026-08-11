@@ -563,6 +563,34 @@ what it does and why it does it that way.
 
 ---
 
+## Auditing what was written
+
+`pipeline/verify.py` reads tags only. To check a tag against the audio it
+claims to describe, `tools/` decodes the finished library and compares:
+
+```bash
+tools/audit_truth.py  out/_all cache/audit_truth.json    # ffprobe + ffmpeg ebur128
+tools/audit_cutoff.py out/_all cache/audit_cutoff.json   # re-runs analyze.py's own code
+tools/audit_compare.py                                   # joins both against the tags
+```
+
+They report and change nothing. `audit_cutoff.py` deliberately imports
+`spectral_cutoff`, `grade_quality` and `real_bitrate` from `pipeline/analyze.py`
+rather than reimplementing them, so it measures the pipeline instead of a
+lookalike -- an earlier copy of the bitrate read reproduced the exact AAC bug
+the audit was meant to catch.
+
+If a container is found to misreport its bitrate, correct the cache without a
+full re-analysis:
+
+```bash
+analyze.py --refresh-bitrate    # header only, no decoding, seconds not hours
+```
+
+`dedupe` consumes `bitrate_kbps`, so run this before any later dedupe.
+
+---
+
 ## Contributing
 
 Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has

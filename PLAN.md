@@ -125,6 +125,15 @@ transcoded files. Spectral cutoff reveals the truth: 258 of 330 sit exactly at
 the 16 kHz wall of 128 kbps, and the genuine outliers (10.5 kHz) are the
 damaged files worth replacing.
 
+The header also lies about *itself*. Essentia reports 1 kbps and mutagen 0 for
+the AAC files YouTube serves, which carry no `esds` bitrate box -- 132 of 261
+m4a files here. `analyze.real_bitrate()` falls back to size over duration,
+which matches ffprobe exactly on every one. Left unfixed it cost nothing
+visible, because the grade comes from the cutoff, but `quality_suspect` needs
+>= 256 kbps to trip and so could never fire for an AAC file. A tag that is
+merely never *used* still has to be right, or the check built on it is
+decoration.
+
 **3.8 Lyric verification works, and small models suffice.** Transcribing 45 s
 and measuring bigram containment against the expected lyrics scores 0.34
 (base) on correct matches and **0.000** on wrong ones. Separation is total even
