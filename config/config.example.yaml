@@ -1,0 +1,158 @@
+# Muzzi - beets configuration  (copy to config.yaml and edit)
+# Used via BEETSDIR=<repo>/config  (see ./beet wrapper)
+#
+# Design notes:
+#  - Originals are NEVER touched. copy:yes + move:no means beets reads the
+#    source folder and writes copies into out/_all.
+#  - Layout is flat by choice: tags do the organising, crates are built later
+#    as folders + M3U. Phone browsing works better flat.
+#  - Everything is singleton-oriented; this library is loose tracks, not albums.
+
+directory: ../out/_all
+library: ../cache/library.db
+
+# ---------------------------------------------------------------- import
+import:
+    copy: yes           # copy into out/_all
+    move: no            # never relocate the source
+    write: yes          # embed tags into the copied files (portability)
+    delete: no
+    resume: yes         # long runs survive interruption
+    # incremental is deliberately OFF: it marks *skipped* paths as "seen", so a
+    # file that failed to match once would never be retried. Resumption is
+    # handled by our own cache + duplicate_action instead.
+    incremental: no
+    duplicate_action: skip
+    log: ../cache/import.log
+    # Detached-from-album by default: this is a singles library.
+    singletons: yes
+
+# --------------------------------------------------------------- matching
+# Thresholds derived from measurement, not guesswork. See cache/match_probe.json.
+#
+# Probe of 24 stratified tracks found NOTHING scores below 0.111: singleton
+# matches carry no album/year, and that missing-field penalty is a hard floor.
+# beets' default strong_rec_thresh of 0.04 is therefore unreachable for this
+# library, which is why every file was being skipped.
+#
+# Observed accuracy by distance:
+#   <= 0.143   11/11 correct  (both Balkan and Western)
+#   0.15-0.40  mixed: Elitni Odredi, THCF, Macklemore, Train all correct
+#   >= 0.40    consistently wrong (Before You Go -> Wham!, Coby -> Tobi Rix)
+match:
+    strong_rec_thresh: 0.15   # auto-accept: 100% correct in the probe
+    medium_rec_thresh: 0.40   # 0.15-0.40 -> review queue; above -> reject
+    rec_gap_thresh: 0.25
+    max_rec:
+        missing_tracks: medium
+        unmatched_tracks: medium
+    # Weights left at beets defaults; overriding them without evidence just
+    # skews distances in ways that are hard to reason about.
+
+# Flat output. Unknown artists still get a sane filename.
+paths:
+    default: $artist - $title
+    singleton: $artist - $title
+    comp: $artist - $title
+
+# muzziclean must run after fromfilename, since it cleans what fromfilename
+# sets. beets loads plugins alphabetically, and "muzziclean" > "fromfilename",
+# so the ordering holds. Renaming the plugin would break that.
+pluginpath: ABSOLUTE_PATH_TO_MUZZI/config/myplugins
+
+plugins: >
+    musicbrainz
+    chroma
+    discogs
+    fromfilename
+    muzziclean
+    ftintitle
+    lastgenre
+    fetchart
+    embedart
+    lyrics
+    replaygain
+    scrub
+    types
+    duplicates
+    badfiles
+    bareasc
+    edit
+    export
+    info
+    missing
+    smartplaylist
+
+# ------------------------------------------------------------ identification
+musicbrainz:
+    searchlimit: 5
+    extra_tags: [year, catalognum, country, media, label]
+
+chroma:
+    auto: yes           # fingerprint during import - the primary ID path here
+
+discogs:
+    # Carries the ~25% ex-Yu slice that MusicBrainz does not have.
+    user_token: YOUR_DISCOGS_TOKEN
+    index_tracks: yes
+    append_style_genre: yes    # keeps Discogs "style" (e.g. Tech House) distinct
+    separator: ', '
+    search_limit: 5
+
+# --------------------------------------------------------------- enrichment
+lastgenre:
+    auto: yes
+    source: track       # per-track, not per-album: this is a singles library
+    count: 3
+    prefer_specific: yes
+    fallback: ''        # leave empty rather than inventing a genre
+
+fetchart:
+    auto: yes
+    minwidth: 300
+    lastfm_key: YOUR_LASTFM_KEY
+    sources: [filesystem, coverart, itunes, albumart, amazon, lastfm]
+
+# Own key rather than the shared built-in one: better rate limits, and this is
+# the same credential the future similar-artist recommendation work will use.
+lastfm:
+    api_key: YOUR_LASTFM_KEY
+
+embedart:
+    auto: yes
+    remove_art_file: no
+    maxwidth: 800       # keeps files small enough to sync comfortably
+
+lyrics:
+    auto: yes
+    # tekstowo/musixmatch are disabled upstream: they block beets' user agent.
+    sources: [lrclib, genius]
+    genius_api_key: YOUR_GENIUS_TOKEN
+    fallback: ''
+    dist_thresh: 0.11
+
+replaygain:
+    auto: yes
+    backend: ffmpeg     # no compile needed; ffmpeg has ebur128
+    threads: 10
+    overwrite: no
+    targetlevel: 89
+
+scrub:
+    auto: yes           # strip junk/encoder cruft before writing clean tags
+
+# Declare numeric types so range queries (bpm:120..128) compare as numbers,
+# not as strings. Without this, sorting and filtering silently misbehave.
+types:
+    bpm: float
+    danceability: float
+    energy: float
+    bpm_conf: float
+    instrumental: float
+
+# ------------------------------------------------------------------- misc
+ui:
+    color: yes
+threading: yes
+per_disc_numbering: no
+original_date: yes      # prefer original release year over reissue year

@@ -1,0 +1,57 @@
+# NOTE: gitignore has no inline comments. A trailing "# ..." becomes part of
+# the pattern and the rule silently matches nothing. Keep comments on own lines.
+
+# ---------------------------------------------------------------- secrets
+# secrets.json holds API keys; config.yaml holds the Discogs, Last.fm and
+# Genius tokens inline (beets has no indirection for them). Neither is ever
+# published -- see config/*.example.* for the shape.
+config/secrets.json
+config/config.yaml
+
+# ------------------------------------------------------------ private data
+# hints.tsv is the irreplaceable one: every answer given to the review queue.
+# It describes a personal library and nothing regenerates it.
+hints.tsv
+review/
+yt_playlists.json
+survey_report.json
+# BPM corrections are keyed by real filenames, so this is a track listing.
+config/bpm_overrides.json
+
+# ------------------------------------------------------- generated + bulky
+# every API response, fingerprints, analysis, logs
+cache/
+# the tagged library and its playlists
+out/
+# per-track Essentia feature dumps
+features/
+# audio fetched to replace low-quality copies
+redownloaded/
+# faster-whisper weights, downloaded on first use
+models/
+# vendored fpcalc binary
+bin/
+.venv/
+
+# ------------------------------------------------------------------ python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# ------------------------------------------------------------------- media
+# A backstop, not a rule anyone should need: no audio, artwork, lyrics or
+# review spreadsheet belongs in this repository, wherever it turns up.
+*.mp3
+*.m4a
+*.flac
+*.ogg
+*.opus
+*.wav
+*.lrc
+*.m3u
+*.ods
+*.db
+*.jpg
+*.jpeg
+*.png
+*.webp

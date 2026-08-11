@@ -1,0 +1,26 @@
+{
+ "EgKvmqpiP6U": {
+  "artist": "Calvin Harris",
+  "title": "We’ll Be Coming Back",
+  "rejected": "Calvin Harris and Example",
+  "reason": "description names a feature chain / track / wrong act"
+ },
+ "Jy03LDEgxSI": {
+  "artist": "Mare",
+  "title": "Lud Vec Danima (feat. Lacku)",
+  "rejected": "Mare Mdma",
+  "reason": "description names a feature chain / track / wrong act"
+ },
+ "b-KXwwcoB10": {
+  "artist": "Podočnjaci",
+  "title": "Pozeru",
+  "rejected": "Podocnjaci",
+  "reason": "description drops the diacritics"
+ },
+ "5bchosGfbnQ": {
+  "artist": "Zvezdana",
+  "title": "Vodi Me Na Rejv",
+  "rejected": "PANTER",
+  "reason": "description names a feature chain / track / wrong act"
+ }
+}

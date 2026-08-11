@@ -1,0 +1,11 @@
+{
+ "_note": "BPM corrections, keyed by SOURCE filename. Written by pipeline/bpm_overrides.py and by hand. action is 'halve', 'double' or 'set'; 'verified' records whether the value was checked against a reference rather than inferred from genre range. Delete this example and keep your own.",
+ "Some Artist - Some Track (Official Video).mp3": {
+  "action": "halve",
+  "from": 186.6,
+  "to": 93.3,
+  "verified": false,
+  "reason": "trap; halved lands at 93, the genre's normal range",
+  "track": "Some Artist - Some Track"
+ }
+}

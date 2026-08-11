@@ -1,0 +1,18 @@
+{
+  "_comment": [
+    "Hand-pinned canonical artist names. The key is the name to replace, the",
+    "value is the name to use. Matching is case- and diacritic-insensitive, so",
+    "one entry covers 'JOLE', 'Jole' and 'jole'.",
+    "",
+    "This exists for artists whose different spellings are genuinely the same",
+    "performer. artist_names.py also derives aliases automatically from",
+    "MusicBrainz artist MBIDs, which is the preferred route -- this file is for",
+    "what MusicBrainz does not cover, or disagrees with."
+  ],
+  "aliases": {
+    "Joško Čagalj Jole": "Jole",
+    "Josko Cagalj Jole": "Jole",
+    "Relja Popović": "Relja",
+    "Relja Popovic": "Relja"
+  }
+}

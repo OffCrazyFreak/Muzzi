@@ -1,0 +1,393 @@
+#!/usr/bin/env python3
+"""Re-fetch the files whose audio is worse than their container claims.
+
+628 tracks measure below 15.5 kHz of real bandwidth, which is a 128 kbps source
+however the header is labelled. Most are YouTube grabs taken before better
+sources existed, or transcodes of transcodes.
+
+Nothing is replaced. Candidates are downloaded into `redownloaded/`, measured,
+and kept only when they clear every one of these:
+
+  * the spectral cutoff is at least MIN_GAIN Hz higher than the original
+  * the duration is within tolerance of the original, so a radio edit or a
+    live version cannot quietly take a studio track's place
+  * the file decodes at all
+
+A candidate that fails any check is deleted and the original stands. The point
+is to end up with strictly better files or nothing, never with a library that
+is different in ways nobody asked for.
+
+Sources, in order of how much they can be trusted to be the right recording:
+
+  1. the YouTube Music video id the cascade already resolved for this track
+     (an Art Track: the distributor's own audio, no video encode)
+  2. the video id from a link you gave in a review sheet
+  3. a fresh YouTube Music search for artist + title
+
+Downloads run in batches so a long run can be watched, stopped and resumed.
+
+Usage:
+  redownload.py --dry-run            # show what would be fetched
+  redownload.py                      # fetch everything below the bar
+  redownload.py --batch 50 --limit 100
+  redownload.py --min-cutoff 15500   # which files count as needing it
+"""
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, HERE)
+
+from pipeline.webmatch import fit, version_mismatch  # noqa: E402
+
+REVIEW = os.path.join(HERE, "cache", "review.json")
+ANALYSIS = os.path.join(HERE, "cache", "analysis.json")
+CASCADE = os.path.join(HERE, "cache", "cascade.json")
+YT_HINTS = os.path.join(HERE, "cache", "hint_youtube.json")
+OUT_DIR = os.path.join(HERE, "redownloaded")
+STAGE_DIR = os.path.join(HERE, "cache", "redl_staging")
+REPORT = os.path.join(HERE, "cache", "redownload.json")
+
+# A replacement has to be meaningfully better, not a rounding difference.
+MIN_GAIN_HZ = 1200
+# Seconds the new file may differ from the old before it is a different cut.
+MAX_DRIFT = 8.0
+MIN_BYTES = 200_000
+
+
+def _ytmusic():
+    from ytmusicapi import YTMusic
+    if not hasattr(_ytmusic, "c"):
+        _ytmusic.c = YTMusic()
+    return _ytmusic.c
+
+
+_YT_LOCK = threading.Lock()
+
+
+_CLAIMED = {}
+_CLAIM_LOCK = threading.Lock()
+
+
+def claim(vid, path):
+    """-> True if this file may use this video.
+
+    One video is one recording, so two different songs resolving to the same
+    id means at least one of them is wrong. "B-Mike - Baby Don't Cut" and
+    "Courtney Parker - Her Last Words" both matched -OF1mkxxb6c: the second
+    search found the first song. Both files were then replaced by the same
+    audio, which made them byte-identical, which chained two unrelated songs
+    into one duplicate group and nearly dropped one of them from the library.
+    """
+    if not vid:
+        return False
+    with _CLAIM_LOCK:
+        owner = _CLAIMED.get(vid)
+        if owner and owner != path:
+            return False
+        _CLAIMED[vid] = path
+        return True
+
+
+def find_source(row, facts, hints):
+    """-> (video_id, how) or (None, why)."""
+    vid = facts.get("video_id")
+    if vid:
+        return vid, "cascade art track"
+    for rec in hints.values():
+        if not isinstance(rec, dict) or rec.get("error"):
+            continue
+        if rec.get("video_id") and rec.get("title") and row.get("proposed_title"):
+            if rec["title"].strip().lower() == row["proposed_title"].strip().lower():
+                return rec["video_id"], "your link"
+    artist, title = row.get("proposed_artist"), row.get("proposed_title")
+    if not (artist and title):
+        return None, "no name to search with"
+    try:
+        with _YT_LOCK:
+            res = _ytmusic().search(f"{artist} {title}", filter="songs", limit=3)
+    except Exception as e:
+        return None, f"search failed: {str(e)[:40]}"
+    if not res:
+        return None, "nothing on YouTube Music"
+    # Do not take res[0] on faith. A search for "Courtney Parker - Her Last
+    # Words" returned B-Mike's "Baby Don't Cut" as its first hit, and because
+    # nothing checked the result against what was asked for, two unrelated
+    # songs were both replaced by that one recording.
+    for x in res:
+        names = ", ".join(a["name"] for a in x.get("artists") or [])
+        if fit(artist, names) < 0.6 or fit(title, x.get("title")) < 0.6:
+            continue
+        if version_mismatch(title, x.get("title")):
+            continue
+        return x.get("videoId"), "youtube music search"
+    return None, "no confident match on YouTube Music"
+
+
+def download(vid, dest_stem):
+    """-> path to the downloaded audio, or None."""
+    tmpl = dest_stem + ".%(ext)s"
+    try:
+        p = subprocess.run(
+            # m4a on purpose, not "bestaudio". YouTube's best audio is Opus in
+            # a .webm container, which Samsung Music cannot play at all
+            # (mp3/m4a/ogg/flac only) and which Essentia cannot decode, so it
+            # would be unmeasurable AND unplayable. The Opus stream is ~136k
+            # against AAC's ~130k -- six kilobits is not worth a file that
+            # does not open on the device this library exists for.
+            ["yt-dlp", "--no-warnings", "--no-playlist", "-f",
+             "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio", "-o", tmpl,
+             f"https://music.youtube.com/watch?v={vid}"],
+            capture_output=True, text=True, timeout=300)
+    except Exception as e:
+        return None, str(e)[:60]
+    if p.returncode != 0:
+        tail = (p.stderr or "").strip().splitlines()
+        return None, tail[-1][:80] if tail else f"yt-dlp exit {p.returncode}"
+    for ext in (".m4a", ".mp3", ".ogg", ".opus", ".webm"):
+        if os.path.exists(dest_stem + ext):
+            return dest_stem + ext, None
+    return None, "yt-dlp produced no file"
+
+
+_MEASURE_SRC = """
+import json, sys
+sys.path.insert(0, %r)
+import essentia.standard as es
+from pipeline.analyze import spectral_cutoff
+try:
+    a = es.MonoLoader(filename=sys.argv[1], sampleRate=44100)()
+    d = len(a) / 44100.0
+    c = spectral_cutoff(a) if len(a) >= 44100 else None
+    print(json.dumps([c, d]))
+except Exception:
+    print(json.dumps([None, None]))
+""" % HERE
+
+
+def measure(path):
+    """-> (cutoff_hz, duration_s) or (None, None).
+
+    Run in a genuinely separate interpreter, not a thread and not a forked
+    worker. Essentia segfaults in a ThreadPoolExecutor and corrupts the heap
+    ("munmap_chunk(): invalid pointer") when inherited across a fork, so the
+    only reliable isolation is a fresh process.
+    """
+    try:
+        p = subprocess.run([sys.executable, "-c", _MEASURE_SRC, path],
+                           capture_output=True, text=True, timeout=180)
+        out = (p.stdout or "").strip().splitlines()
+        return tuple(json.loads(out[-1])) if out else (None, None)
+    except Exception:
+        return None, None
+
+
+def fetch_one(task):
+    """Download stage only. Network-bound, safe in threads."""
+    row, an, facts, hints = task
+    src = row["path"]
+    vid, how = find_source(row, facts, hints)
+    if not vid:
+        return {"path": src, "file": row["file"], "status": "no source",
+                "why": how}
+    if not claim(vid, src):
+        return {"path": src, "file": row["file"], "status": "no source",
+                "why": f"video {vid} already used for another song",
+                "video_id": vid}
+    base = os.path.splitext(os.path.basename(src))[0][:80]
+    stem = os.path.join(STAGE_DIR, f"{abs(hash(src)) % 10**10}_{base}")
+    got, err = download(vid, stem)
+    if not got:
+        return {"path": src, "file": row["file"], "status": "download failed",
+                "why": err, "video_id": vid}
+    if os.path.getsize(got) < MIN_BYTES:
+        os.remove(got)
+        return {"path": src, "file": row["file"], "status": "download failed",
+                "why": "file too small", "video_id": vid}
+    return {"path": src, "file": row["file"], "status": "downloaded",
+            "video_id": vid, "how": how, "staged": got}
+
+
+def judge(res, an, args):
+    """Decide whether a downloaded candidate replaces anything. Deletes it if
+    not, so a run leaves nothing behind but improvements."""
+    got = res["staged"]
+    old_cut = an.get("spectral_cutoff_hz") or 0
+    old_dur = an.get("decoded_secs") or 0
+    new_cut, new_dur = res.get("new_cutoff_raw"), res.get("new_duration")
+
+    def drop(status, why):
+        try:
+            os.remove(got)
+        except OSError:
+            pass
+        return {k: res[k] for k in ("file", "video_id")} | {
+            "status": status, "why": why}
+
+    if not new_cut:
+        return drop("rejected", "candidate did not decode")
+    if old_dur and new_dur and abs(new_dur - old_dur) > args.max_drift:
+        return drop("rejected",
+                    f"different length ({new_dur:.0f}s vs {old_dur:.0f}s)")
+    if new_cut < old_cut + args.min_gain:
+        return drop("not better", f"{new_cut:.0f}Hz vs {old_cut:.0f}Hz")
+
+    # Keep the source folder layout so the result can be fed straight back in.
+    src = res["path"]
+    rel = os.path.relpath(os.path.dirname(src), args.common_root) \
+        if args.common_root else ""
+    dst_dir = os.path.join(OUT_DIR, rel) if rel not in (".", "") else OUT_DIR
+    os.makedirs(dst_dir, exist_ok=True)
+    dst = os.path.join(dst_dir, os.path.basename(src).rsplit(".", 1)[0]
+                       + os.path.splitext(got)[1])
+    shutil.move(got, dst)
+    return {"file": res["file"], "status": "kept", "video_id": res["video_id"],
+            "how": res["how"], "old_cutoff": old_cut,
+            "new_cutoff": round(new_cut), "gain": round(new_cut - old_cut),
+            "path": dst}
+
+
+def common_root(paths):
+    try:
+        return os.path.commonpath([os.path.dirname(p) for p in paths])
+    except ValueError:
+        return ""
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--min-cutoff", type=float, default=15500,
+                    help="files measuring below this need replacing")
+    ap.add_argument("--min-gain", type=float, default=MIN_GAIN_HZ)
+    ap.add_argument("--max-drift", type=float, default=MAX_DRIFT)
+    ap.add_argument("--batch", type=int, default=50)
+    ap.add_argument("--limit", type=int)
+    ap.add_argument("--workers", type=int)
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    rows = {r["path"]: r for r in json.load(open(REVIEW))}
+    analysis = {v["path"]: v for v in json.load(open(ANALYSIS)).values()
+                if v.get("path")}
+    cascade = json.load(open(CASCADE)) if os.path.exists(CASCADE) else {}
+    hints = json.load(open(YT_HINTS)) if os.path.exists(YT_HINTS) else {}
+    done = json.load(open(REPORT)) if os.path.exists(REPORT) else {}
+
+    todo = []
+    for path, an in analysis.items():
+        cut = an.get("spectral_cutoff_hz") or 0
+        if cut >= args.min_cutoff:
+            continue
+        row = rows.get(path)
+        if not row or path in done:
+            continue
+        todo.append((path, row, an))
+    todo.sort(key=lambda x: x[2].get("spectral_cutoff_hz") or 0)
+    if args.limit:
+        todo = todo[: args.limit]
+
+    args.common_root = common_root(list(analysis))
+
+    if not todo:
+        print(f"  nothing below {args.min_cutoff:.0f}Hz left ({len(done)} done)\n")
+        return 0
+
+    print(f"\n  {len(todo)} files measure below {args.min_cutoff:.0f}Hz "
+          f"({len(done)} already attempted)")
+    if args.dry_run:
+        for path, row, an in todo[:40]:
+            print(f"    {an.get('spectral_cutoff_hz'):>6}Hz  "
+                  f"{str(row.get('proposed_artist'))[:22]:22} | "
+                  f"{str(row.get('proposed_title'))[:34]}")
+        print(f"\n  dry run; nothing downloaded\n")
+        return 0
+
+    os.makedirs(STAGE_DIR, exist_ok=True)
+    os.makedirs(OUT_DIR, exist_ok=True)
+    # Network-bound download, CPU-bound measure. The measure is serialised, so
+    # oversubscribing the cores only helps the downloads.
+    workers = args.workers or min(8, (os.cpu_count() or 4))
+    # Decoding a whole track costs real RAM, so the measuring pool is sized to
+    # the cores rather than oversubscribed like the downloads.
+    cpu_workers = max(1, min(workers, (os.cpu_count() or 4) - 1))
+    print(f"  {workers} download workers, {cpu_workers} measuring, "
+          f"batches of {args.batch}\n")
+
+    lock = threading.Lock()
+    stats = {"kept": 0, "not better": 0, "rejected": 0,
+             "download failed": 0, "no source": 0}
+    t0 = time.time()
+
+    for start in range(0, len(todo), args.batch):
+        batch = todo[start:start + args.batch]
+        bn = start // args.batch + 1
+        total_b = (len(todo) + args.batch - 1) // args.batch
+        print(f"  --- batch {bn}/{total_b} ({len(batch)} files)", flush=True)
+
+        # Phase 1: download, in threads.
+        fetched = []
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(fetch_one, (row,
+                                          analysis.get(p, {}),
+                                          (cascade.get(p) or {}).get("facts") or {},
+                                          hints)): p for p, row, _a in batch}
+            for f in as_completed(futs):
+                p = futs[f]
+                try:
+                    res = f.result()
+                except Exception as e:
+                    res = {"path": p, "file": os.path.basename(p),
+                           "status": "download failed", "why": str(e)[:70]}
+                if res["status"] == "downloaded":
+                    fetched.append(res)
+                else:
+                    with lock:
+                        done[p] = res
+                        stats[res["status"]] = stats.get(res["status"], 0) + 1
+
+        # Phase 2: measure, in separate processes.
+        if fetched:
+            with ThreadPoolExecutor(max_workers=cpu_workers) as ex:
+                futs = {ex.submit(measure, r["staged"]): r for r in fetched}
+                for f in as_completed(futs):
+                    r = futs[f]
+                    try:
+                        r["new_cutoff_raw"], r["new_duration"] = f.result()
+                    except Exception:
+                        r["new_cutoff_raw"], r["new_duration"] = None, None
+
+        # Phase 3: keep or delete.
+        for r in fetched:
+            res = judge(r, analysis.get(r["path"], {}), args)
+            with lock:
+                done[r["path"]] = res
+                stats[res["status"]] = stats.get(res["status"], 0) + 1
+                if res["status"] == "kept":
+                    print(f"    KEPT  +{res['gain']:>5}Hz  "
+                          f"{res['old_cutoff']:>5}->{res['new_cutoff']:<5} "
+                          f"{res['file'][:44]}", flush=True)
+        json.dump(done, open(REPORT + ".tmp", "w"), ensure_ascii=False, indent=1)
+        os.replace(REPORT + ".tmp", REPORT)
+        print(f"      kept {stats['kept']}, not better {stats['not better']}, "
+              f"failed {stats['download failed']}", flush=True)
+
+    shutil.rmtree(STAGE_DIR, ignore_errors=True)
+    print(f"\n  {len(todo)} attempted in {(time.time()-t0)/60:.1f} min\n")
+    for k, v in sorted(stats.items(), key=lambda x: -x[1]):
+        print(f"    {k:18} {v}")
+    print(f"\n  better files -> {OUT_DIR}")
+    print("  originals untouched. Feed the folder back through run.py when "
+          "you are happy with it.\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

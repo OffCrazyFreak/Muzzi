@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# beets wrapper: pins BEETSDIR, venv and local bin (fpcalc) so all state stays
+# self-contained. Resolved relative to this script, so a clone works anywhere.
+set -euo pipefail
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export BEETSDIR="$ROOT/config"
+export PATH="$ROOT/bin:$PATH"
+exec "$ROOT/.venv/bin/beet" "$@"
