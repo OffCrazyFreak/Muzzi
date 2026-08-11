@@ -92,11 +92,20 @@ _LRC_STAMP = re.compile(r"\[\d+:\d+[.:]\d+\]")
 # language, it is noise that happens to be spelled in one.
 MIN_DISTINCT_WORDS = 20
 
+# Same line the picker draws, imported rather than repeated so the write side
+# cannot start disagreeing with the side that chose the entry.
+from pipeline.lyrics_fetch import MIN_FIT  # noqa: E402
 
-def lyrics_trustworthy(entry, verified, artist):
-    """-> False when these lyrics are probably not this song's.
+# How far a lyric sheet's own duration may sit from the recording's before its
+# timings are refused. 2s is LRCLIB's /api/get signature tolerance, and what
+# LRCLIBee and Music Assistant both require.
+MAX_DURATION_DELTA = 2.0
 
-    Two ways it goes wrong, both seen here:
+
+def lyrics_trustworthy(entry, verified, artist, title=None):
+    """-> (ok, reason). False when these lyrics are probably not this song's.
+
+    Three ways it goes wrong, all seen here:
 
       * The track has no words. Whisper found under three in a vocal-detected
         excerpt, yet LRCLIB happily returned 4180 characters for an
@@ -104,21 +113,76 @@ def lyrics_trustworthy(entry, verified, artist):
       * LRCLIB matched a different artist's song of the same name. Grse's
         "Mamba" got JoelB's, Rasta's "Kawasaki" got a Polish one. If the
         transcript then fails to match, there is nothing left arguing for it.
+      * LRCLIB matched a different song by the *right* artist, which is the
+        one this used to wave through. The language and the voice are both
+        correct, so nothing downstream looks wrong; only the words are. 15
+        sidecars here carried another of the artist's songs.
 
     A mismatch alone is not disqualifying: where a file's own tags named the
     artist "various" or "dj marchez", LRCLIB's answer is the correct one and
-    the transcript confirms it.
+    the transcript confirms it. That escape hatch is kept, and now covers a
+    title mismatch too, for the same reason -- a file titled with the album
+    name is wrong about itself, not about the lyrics.
+
+    An entry that never recorded which hit it took cannot be judged at all.
+    Those used to pass silently, because the check was written as "if we know
+    the artist and it disagrees". 139 entries here are that shape. Absence of
+    evidence is not agreement, so they are untrusted unless the transcript
+    speaks for them.
     """
     if not entry or not isinstance(entry, dict):
-        return True
+        return True, None
     if verified and verified.get("instrumental"):
-        return False
+        return False, "instrumental"
+    confirmed = bool(verified and verified.get("verdict") == "confirmed")
     matched = entry.get("matched") or ""
-    if artist and " - " in matched:
-        from pipeline.webmatch import fit
-        if fit(artist, matched.split(" - ")[0]) < 0.5:
-            return bool(verified and verified.get("verdict") == "confirmed")
-    return True
+    if " - " not in matched:
+        if entry.get("synced") or entry.get("plain"):
+            return (True, None) if confirmed else (False, "unverifiable_match")
+        return True, None
+    from pipeline.webmatch import fit
+    ma, _, mt = matched.partition(" - ")
+    # Prefer the fits the picker already stamped; fall back to computing them
+    # so an entry written by an older selector is still judged.
+    af = entry.get("artist_fit")
+    tf = entry.get("title_fit")
+    if artist and af is None:
+        af = fit(artist, ma)
+    if title and tf is None:
+        tf = fit(title, mt)
+    if artist and af is not None and af < MIN_FIT:
+        return (True, None) if confirmed else (False, "wrong_artist")
+    if title and tf is not None and tf < MIN_FIT:
+        return (True, None) if confirmed else (False, "wrong_title")
+    return True, None
+
+
+def lyrics_timing_ok(entry, decoded_secs, cut=0.0):
+    """-> (ok, reason). False when the sheet was timed for a different edit.
+
+    A lyric sheet is a list of moments. If it was written against a recording
+    of a different length, every one of those moments is wrong, and wrong by
+    more the further in you get. That is what makes lyrics run ahead of the
+    song: the file is longer than the edit the sheet describes.
+
+    Measured here, comparing LRCLIB's duration to the file's own: the median
+    sheet is 0.6s out, which is nothing, but 315 of 1178 are more than 2s out
+    and 112 are more than 10s out. One was a 108s sheet beside a 289s file.
+
+    2s is the tolerance LRCLIB's own /api/get signature match uses, and what
+    LRCLIBee and Music Assistant both require. Borrowing it keeps us from
+    inventing a threshold nobody else honours.
+
+    `cut` is added back because the comparison has to be against the recording
+    LRCLIB timed, not the copy we trimmed silence off. Without it, trimming
+    would push tracks over the gate for having been improved.
+    """
+    md = entry.get("matched_duration") if isinstance(entry, dict) else None
+    if not md or not decoded_secs:
+        return True, None            # nothing to compare: not evidence of wrong
+    if abs((decoded_secs + (cut or 0.0)) - md) > MAX_DURATION_DELTA:
+        return False, "duration_mismatch"
+    return True, None
 
 
 def resolve_language(verified, lyrics):
@@ -470,6 +534,7 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
             "muzzi_source_file": os.path.basename(src),
             "muzzi_lyric_verdict": (verified or {}).get("verdict"),
             "muzzi_lyric_score": (verified or {}).get("score"),
+            "muzzi_lyric_withheld": extra.get("lyric_reason"),
             # Always written, including as "0.000", so that a file with no
             # marker at all can be told from one deliberately left whole.
             "muzzi_trim": f"{trimmed:.3f}",
@@ -657,6 +722,11 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
     if verified and verified.get("verdict"):
         txxx("MUZZI_LYRIC_VERDICT", verified["verdict"])
         txxx("MUZZI_LYRIC_SCORE", verified.get("score"))
+    # Why a track has no lyrics, or no timings. Without this, "LRCLIB has
+    # nothing for this song" and "we refused what LRCLIB had" look identical
+    # from the outside, and the coverage figures cannot be read back.
+    if extra.get("lyric_reason"):
+        txxx("MUZZI_LYRIC_WITHHELD", extra["lyric_reason"])
 
     # ID3v2.4: Samsung's own guidance says v2.4 is reliably supported while
     # v2.3 "may encounter display issues, such as incorrect character
@@ -1004,7 +1074,7 @@ def main():
         # checked so the review sheet can say so.
         cut = silence.cut_for(sil.get(src))
 
-        lyrics, synced = None, None
+        lyrics, synced, lyric_reason = None, None, None
         entry = None
         if ident:
             entry = lyric_cache.get(f'{ident["artist"]}|{ident["title"]}'.lower())
@@ -1012,11 +1082,31 @@ def main():
                 synced, lyrics = entry.get("synced"), entry.get("plain")
             elif isinstance(entry, str):
                 lyrics = entry
+            # Whether these are this song's words at all. Checked before the
+            # shift, because re-timing the wrong song's sheet is wasted work.
+            ok, why = lyrics_trustworthy(entry, v, ident.get("artist"),
+                                         ident.get("title"))
+            if not ok:
+                lyrics, synced = None, None
+                lyric_reason = why
+                stats["lyrics_rejected"] = stats.get("lyrics_rejected", 0) + 1
+            elif synced:
+                # Whether the timings fit this recording. Separate question
+                # from the one above and answered separately: a sheet can be
+                # the right song and still be timed for a different edit, in
+                # which case the words are worth keeping and the numbers are
+                # not.
+                ok, why = lyrics_timing_ok(entry, a.get("decoded_secs"), cut)
+                if not ok:
+                    synced = None
+                    lyric_reason = why
+                    stats["timing_rejected"] = stats.get("timing_rejected", 0) + 1
 
         # An offset only means anything next to the sheet it was measured
         # against, so the sheet goes in with the lookup. If lyrics_fetch has
         # since swapped in a different one, the measurement is refused rather
-        # than applied to a body it never saw.
+        # than applied to a body it never saw. Measured after the gates, so a
+        # sheet we refused cannot be shifted.
         offset = lyric_align.offset_for(align.get(src), synced)
         lrc_shift = (offset - cut) if offset is not None else 0.0
         if abs(lrc_shift) < MIN_LRC_SHIFT:
@@ -1029,12 +1119,11 @@ def main():
             # Prefer the timestamped body for embedding. Re-read after the
             # shift so the embedded frame and the sidecar carry the same text.
             lyrics = synced or lyrics
-            if not lyrics_trustworthy(entry, v, ident.get("artist")):
-                lyrics, synced = None, None
-                stats["lyrics_rejected"] = stats.get("lyrics_rejected", 0) + 1
 
         # Art and genre are only meaningful next to a trusted identity.
         extra = dict(enrich.get(src, {})) if trusted else {}
+        if lyric_reason:
+            extra["lyric_reason"] = lyric_reason
         if trusted and r.get("proposed_album"):
             extra["album_gain"] = album_gain.get(
                 f'{r.get("proposed_artist")}|{r["proposed_album"]}'.lower())
@@ -1099,6 +1188,14 @@ def main():
     if stats.get("lrc_removed"):
         print(f"    stale .lrc removed                "
               f"{stats['lrc_removed']:4}")
+    # A drop in sidecar count is the gates working, not a regression. Print
+    # the reasons next to the total so it reads that way.
+    if stats.get("lyrics_rejected"):
+        print(f"    lyrics refused, wrong song        "
+              f"{stats['lyrics_rejected']:4}")
+    if stats.get("timing_rejected"):
+        print(f"    timings refused, wrong edit       "
+              f"{stats['timing_rejected']:4}   (words kept)")
     print(f"    leading silence trimmed           {stats.get('trimmed', 0):4}")
     if stats.get("trim_failed"):
         print(f"      wanted but not cut              {stats['trim_failed']:4}")
