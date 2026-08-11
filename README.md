@@ -584,7 +584,7 @@ If a container is found to misreport its bitrate, correct the cache without a
 full re-analysis:
 
 ```bash
-analyze.py --refresh-bitrate    # header only, no decoding, seconds not hours
+pipeline/analyze.py --refresh-bitrate   # header only, no decoding, seconds not hours
 ```
 
 `dedupe` consumes `bitrate_kbps`, so run this before any later dedupe.
