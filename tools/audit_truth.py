@@ -68,15 +68,17 @@ def _ebur128(path, pre=""):
     except Exception as e:
         return None, None, f"{type(e).__name__}: {str(e)[:120]}", 0
     err = r.stderr or ""
+    bad = len(re.findall(r"Header missing|Error while decoding", err))
+    # A non-zero exit means ffmpeg stopped early, so any integrated loudness
+    # it printed covers the decoded prefix, not the file. This is ground
+    # truth other numbers are graded against, and a partial measurement
+    # presented as whole-file loudness is worse than no measurement at all:
+    # it would be silently compared against the tag as if it were valid.
+    if r.returncode != 0:
+        return None, None, f"ffmpeg exit {r.returncode}: {err.strip()[-120:]}", bad
     mi, mp = _I.search(err), _PEAK.findall(err)
-    # Keep whatever ffmpeg did print -- a partial decode still measures
-    # something useful -- but say so, or a failed run is indistinguishable
-    # from a file that simply had no loudness to report.
-    fail = (f"ffmpeg exit {r.returncode}: {err.strip()[-120:]}"
-            if r.returncode != 0 else None)
     return (float(mi.group(1)) if mi else None,
-            float(mp[-1]) if mp else None, fail,
-            len(re.findall(r"Header missing|Error while decoding", err)))
+            float(mp[-1]) if mp else None, None, bad)
 
 
 def loudness(path):
