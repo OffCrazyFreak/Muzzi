@@ -15,7 +15,7 @@ import os
 import re
 import statistics
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 
 import mutagen
 
@@ -207,7 +207,7 @@ def main():
 
     # ---------- quality ----------
     if cut:
-        cut_err, grade_mismatch, tagcut_err = [], [], []
+        grade_mismatch, tagcut_err = [], []
         susp_mismatch, susp_checked = [], 0
         conf = Counter()
         for r in rows:
@@ -270,16 +270,13 @@ def main():
     seed_yt = {os.path.basename(k): v.get("youtube_id")
                for k, v in ts.items() if isinstance(v, dict) and v.get("youtube_id")}
     hy = load("hint_youtube.json")
-    in_file, could, dur_mismatch, ok_dur = 0, 0, [], 0
+    in_file, dur_mismatch, ok_dur = 0, [], 0
     for r in rows:
         m = YT.search(r["tags"].get("_comment") or "")
         vid = m.group(1) if m else None
         if vid:
             in_file += 1
-        seed = seed_yt.get(r["src"] or "")
-        if seed:
-            could += 1
-        v = vid or seed
+        v = vid or seed_yt.get(r["src"] or "")
         h = hy.get(v or "")
         ps = r["truth"].get("probe_secs")
         if h and h.get("duration") and ps:
