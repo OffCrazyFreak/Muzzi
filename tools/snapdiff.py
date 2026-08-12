@@ -52,6 +52,7 @@ def read_targets(path, tracks):
     would quietly become zero targets.
     """
     by_fp = {t["fp"]: t["path"] for t in tracks if t.get("fp")}
+    known = {t["path"] for t in tracks}
     by_file = {}
     for t in tracks:
         by_file.setdefault(os.path.basename(t["path"]), []).append(t["path"])
@@ -64,9 +65,13 @@ def read_targets(path, tracks):
                 continue
             entry, _, field = line.partition("\t")
             entry, field = entry.strip(), field.strip()
+            # An absolute path is checked against the sample like everything
+            # else. Trusting it because it looks like a path is how a typo
+            # becomes a target that matches nothing, is never reported as
+            # unresolved, and can therefore never be missed.
             if entry in by_fp:
                 paths = [by_fp[entry]]
-            elif os.path.isabs(entry):
+            elif entry in known:
                 paths = [entry]
             else:
                 paths = by_file.get(entry, [])

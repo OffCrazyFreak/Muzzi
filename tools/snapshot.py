@@ -37,6 +37,12 @@ from tools.tagdump import sidecar_lrc, tags_of  # noqa: E402
 BY_PATH = ("identity.json", "enrich.json", "lyric_verify.json",
            "tagseed.json", "cascade.json")
 
+# What counts as an output file. Everything Samsung Music will play, which is
+# the floor this library is tagged against, plus the formats write_tags can
+# produce from these sources.
+AUDIO_EXT = {".mp3", ".m4a", ".mp4", ".aac", ".flac", ".ogg", ".oga",
+             ".opus", ".wav", ".3gp", ".3ga"}
+
 
 def load(cache, name):
     p = os.path.join(cache, name)
@@ -160,11 +166,13 @@ def index_output(out_dir):
     dropped and reported instead. A blank field beats a wrong one.
     """
     index, ambiguous, unstamped = {}, set(), []
-    for dp, _, names in os.walk(out_dir):
-        if os.path.basename(dp) == "playlists":
-            continue
+    for dp, dirs, names in os.walk(out_dir):
+        # Pruned from the walk rather than skipped per file: a playlist read
+        # as audio yields no MUZZI_SOURCE_FILE and would be reported as an
+        # unstamped output file, which is a real finding when it is true.
+        dirs[:] = [d for d in dirs if d != "playlists"]
         for n in sorted(names):
-            if n.lower().endswith(".lrc"):
+            if os.path.splitext(n)[1].lower() not in AUDIO_EXT:
                 continue
             p = os.path.join(dp, n)
             src = tags_of(p, hash_long=False).get("MUZZI_SOURCE_FILE")
