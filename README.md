@@ -191,12 +191,12 @@ Then `verify` reads the output back and reports what still needs you.
 
 ```
 1.  fingerprint
-2.  identify -> textsearch          ║  analyze -> dedupe
+2.  identify -> textsearch          ║  analyze -> silence -> dedupe
 3.  review
 4.  from_filename -> review
 5.  hints_resolve -> review
 6.  webmatch -> review
-7.  cascade -> fetch_art -> ...     ║  lyrics_fetch -> verify_lyrics
+7.  cascade -> fetch_art -> ...     ║  lyrics_fetch -> ... -> lyric_align
 8.  review
 9.  artist_names -> origin -> lastfm_tags -> dedupe_names
 10. write_tags -> export -> verify
@@ -225,7 +225,9 @@ can't be wrong about which file it's describing:
 |---|---|
 | `analyze` | BPM (three engines), musical key -> Camelot, loudness, danceability, spectral cutoff |
 | `dedupe` | files whose fingerprints match: the same recording twice |
+| `silence` | how much dead air each file opens with, and whether it is safe to cut. Measures the *source*, so the figure never changes and trimming can never happen twice |
 | `verify_lyrics` | Whisper transcribes the audio and compares it to the fetched lyrics -- independent proof the file is the song we think, plus language detection |
+| `lyric_align` | how far each synced lyric sheet is out of step with its audio, by locating the opening lines in a word-timestamped transcript |
 
 **Enrichment** turns what we learned into new search keys:
 
