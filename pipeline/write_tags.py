@@ -753,9 +753,12 @@ def main():
         known = {r["path"] for r in json.load(open(REVIEW)) if r.get("path")}
         with open(args.only, encoding="utf-8") as fh:
             for line in fh:
-                line = line.split("#")[0].strip()
-                if not line:
+                # Leading # only: a song called "Song #1" is a real filename
+                # and stripping from anywhere would drop it from the subset
+                # without saying so.
+                if not line.strip() or line.lstrip().startswith("#"):
                     continue
+                line = line.strip()
                 path = by_fp.get(line, line)
                 if path in known:
                     wanted.add(path)
@@ -768,7 +771,8 @@ def main():
                 print(f"    {u}")
         # A subset that silently came out empty writes nothing, reports no
         # error, and reads exactly like a clean run.
-        dropped = [p for p in wanted if p not in {r["path"] for r in rows}]
+        writable = {r["path"] for r in rows}
+        dropped = [p for p in wanted if p not in writable]
         rows = [r for r in rows if r.get("path") in wanted]
         if not rows:
             sys.exit(f"--only {args.only} selected no writable track "

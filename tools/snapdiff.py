@@ -60,10 +60,12 @@ def read_targets(path, tracks):
     targets, unresolved = {}, []
     with open(path, encoding="utf-8") as fh:
         for line in fh:
-            line = line.split("#")[0].rstrip()
-            if not line.strip():
+            # Only a leading # is a comment. Stripping from anywhere would
+            # truncate "Artist - Song #1.mp3" into a path that does not
+            # exist, and the target would vanish rather than fail loudly.
+            if not line.strip() or line.lstrip().startswith("#"):
                 continue
-            entry, _, field = line.partition("\t")
+            entry, _, field = line.rstrip("\n").partition("\t")
             entry, field = entry.strip(), field.strip()
             # An absolute path is checked against the sample like everything
             # else. Trusting it because it looks like a path is how a typo
