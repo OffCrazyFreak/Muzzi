@@ -39,6 +39,16 @@ BPM_BANDS = [(0, 90, "060-090"), (90, 100, "090-100"),
 # hold genuinely Bulgarian music, split it back out.
 BALKAN_LANGS = {"hr", "sr", "bs", "sl", "mk", "bg"}
 
+# A playlist below this is not worth the row it occupies in a player's list.
+# Genre fragments produced 26 of them, twelve holding a single track.
+MIN_PLAYLIST = 15
+
+# Language is exempt. Montenegrin and Macedonian are real distinctions that
+# happen to be small, the fold below already collapses the Whisper noise tail
+# into Other, and Other is a catch-all: pruning it would silently drop the
+# tracks it exists to hold.
+FLOOR_EXEMPT = ("Language",)
+
 
 def band_for(bpm):
     for lo, hi, name in BPM_BANDS:
@@ -61,7 +71,8 @@ def link_or_copy(src, dst):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.path.join(HERE, "out"))
-    ap.add_argument("--crates", default="BPM,Language,Decade,Mood,Quality,Unknown",
+    ap.add_argument("--crates",
+                    default="BPM,Language,Decade,Mood,Quality,Unknown,Genre",
                     help="comma-separated crate groups to emit. Camelot (key) "
                          "is off by default: 24 harmonic-mixing crates buried "
                          "the 8 BPM ones that actually get used.")
@@ -73,6 +84,19 @@ def main():
                          "players like Poweramp that ignore relative ones")
     args = ap.parse_args()
     groups = {g.strip() for g in args.crates.split(',') if g.strip()}
+
+    # --crates used to be parsed and then consulted for Camelot alone, so
+    # every other group was emitted no matter what you passed. It is honoured
+    # for all of them now.
+    from pipeline import scenes
+
+    # Only the hand-curated scenes get a genre playlist. Every other genre
+    # crate was built from the TCON tag already inside the file, so a player's
+    # own genre browser showed exactly the same thing, and could not disagree
+    # by construction. Turbofolk is not in scenes.json (it comes from the
+    # Last.fm and Discogs tables) but is browsed the same way, so it is named
+    # here rather than left out.
+    scene_genres = set(scenes.scene_names()) | {"Turbofolk"}
 
     allpath = os.path.join(args.out, "_all")
     if not os.path.isdir(allpath):
@@ -140,7 +164,7 @@ def main():
             bpm = float(txxx("BPM_PRECISE") or std("TBPM", "tmpo") or 0)
         except Exception:
             pass
-        if bpm:
+        if bpm and "BPM" in groups:
             b = band_for(bpm)
             if b:
                 crates[os.path.join("BPM", b)].append(fn)
@@ -157,15 +181,17 @@ def main():
         in_balkan_folder = "Music Other" in fn
         is_balkan = bool(o) or (lang in BALKAN_LANGS) or in_balkan_folder
 
-        if is_balkan:
-            # Both, deliberately. The per-country crates are what makes this
-            # browsable, but "all of it" is still a thing you want to put on
-            # and the union costs nothing -- a playlist references files.
-            crates[os.path.join("Language", "Balkan")].append(fn)
-            if o:
-                crates[os.path.join("Language", o["label"])].append(fn)
-        elif lang:
-            crates[os.path.join("Language", lang)].append(fn)
+        if "Language" in groups:
+            if is_balkan:
+                # Both, deliberately. The per-country crates are what makes
+                # this browsable, but "all of it" is still a thing you want to
+                # put on and the union costs nothing: a playlist references
+                # files.
+                crates[os.path.join("Language", "Balkan")].append(fn)
+                if o:
+                    crates[os.path.join("Language", o["label"])].append(fn)
+            elif lang:
+                crates[os.path.join("Language", lang)].append(fn)
 
         # Genre crates come from the tag written into the file, not from a
         # second list kept alongside it. The tag is what a player groups by,
@@ -176,30 +202,31 @@ def main():
         else:
             genres = [str(x) for x in (t.get("\xa9gen") or [])]
         for g in genres:
-            if g.strip():
-                crates[os.path.join("Genre", g.strip())].append(fn)
+            g = g.strip()
+            if g and "Genre" in groups and g in scene_genres:
+                crates[os.path.join("Genre", g)].append(fn)
 
         cam = txxx("CAMELOT")
         if cam and "Camelot" in groups:
             crates[os.path.join("Camelot", cam)].append(fn)
 
         q = txxx("QUALITY")
-        if q == "low":
+        if q == "low" and "Quality" in groups:
             crates["Check quality"].append(fn)
 
         # No identity was trusted for these; they still have BPM and key.
-        if txxx("MUZZI_SOURCE") == "audio-only":
+        if txxx("MUZZI_SOURCE") == "audio-only" and "Unknown" in groups:
             crates["Needs identification"].append(fn)
 
         try:
             d = float(txxx("DANCEABILITY") or 0)
-            if d >= 1.2:
+            if d >= 1.2 and "Mood" in groups:
                 crates["Mood/danceable"].append(fn)
         except Exception:
             pass
 
         yr = std("TDRC", "\xa9day")
-        if yr:
+        if yr and "Decade" in groups:
             try:
                 y = int(str(yr)[:4])
                 crates[os.path.join("Decade", f"{y//10*10}s")].append(fn)
@@ -214,6 +241,17 @@ def main():
              and not c.endswith("Balkan")]
     for c in small:
         crates[os.path.join("Language", "Other")].extend(crates.pop(c))
+
+    # Anything left that is too short to be worth a row in the player's
+    # playlist list. Done after the fold above, so a language crate is judged
+    # on its final size rather than its size before Other absorbed the tail.
+    # Dropped, not merged: there is no parent to merge a four-track BPM band
+    # into, and inventing one would be worse than not offering the playlist.
+    tiny = [c for c in crates
+            if len(crates[c]) < MIN_PLAYLIST
+            and not c.startswith(tuple(g + os.sep for g in FLOOR_EXEMPT))
+            and c not in FLOOR_EXEMPT]
+    dropped = {c: len(crates.pop(c)) for c in tiny}
 
     # Crate FOLDERS are gone on purpose. A file lives in exactly one directory,
     # so multi-axis folders mean duplication -- and on a phone (FAT32/MTP) the
@@ -252,7 +290,14 @@ def main():
     n_pl = len(crates) * (2 if args.absolute else 1)
     print(f"  {n_pl} playlists -> {pldir}"
           f"{' (relative + absolute)' if args.absolute else ''}")
-    print("  no crate folders: playlists reference files, so nothing duplicates\n")
+    print("  no crate folders: playlists reference files, so nothing duplicates")
+    # Say what was pruned. A silent cap reads as "everything is here" when it
+    # is not, and the tracks are still in _all either way.
+    if dropped:
+        print(f"  {len(dropped)} crates below {MIN_PLAYLIST} tracks, not written: "
+              + ", ".join(f"{c.replace(os.sep, ' - ')} ({n})"
+                          for c, n in sorted(dropped.items())))
+    print()
     for crate, members in sorted(crates.items()):
         print(f"    {crate:34} {len(members):4}")
     du = sum(os.path.getsize(os.path.join(allpath, f)) for f in files)
