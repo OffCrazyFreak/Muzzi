@@ -13,6 +13,7 @@ import hashlib
 import os
 
 import mutagen
+from mutagen.mp4 import MP4
 
 # ID3 frames whose value is one string. Read through their frame id so a
 # freeform TXXX of the same name cannot shadow the real frame.
@@ -31,6 +32,16 @@ _MP4_TEXT = {
     "\xa9alb": "album", "\xa9day": "year", "\xa9gen": "genre",
     "tmpo": "bpm", "\xa9wrt": "composer", "\xa9cmt": "comment",
     "\xa9lyr": "lyrics",
+}
+
+
+# Vorbis comment keys, as write_generic writes them, mapped onto the same
+# field names the other two containers produce. Anything not listed keeps its
+# own upper-case key, exactly like a freeform TXXX or MP4 atom.
+_VORBIS_TEXT = {
+    "TITLE": "title", "ARTIST": "artist", "ALBUMARTIST": "albumartist",
+    "ALBUM": "album", "DATE": "year", "GENRE": "genre", "BPM": "bpm",
+    "LYRICS": "lyrics", "ISRC": "isrc", "TRACKNUMBER": "track",
 }
 
 
@@ -135,7 +146,7 @@ def tags_of(path, hash_long=True):
             else None
         apic = t.getall("APIC")
         out["_art"] = _art(apic[0].data, apic[0].mime) if apic else None
-    else:                                                          # MP4
+    elif isinstance(f, MP4):                                       # MP4
         for atom, name in _MP4_TEXT.items():
             v = t.get(atom)
             if v:
@@ -145,6 +156,17 @@ def tags_of(path, hash_long=True):
                 _add(out, k.split(":")[-1], keep(_text(v[0])))
         cov = t.get("covr")
         out["_art"] = _art(bytes(cov[0]), "image/jpeg") if cov else None
+    else:                                                          # FLAC, OGG
+        # Vorbis comments are free-form upper-case keys, which is how
+        # write_generic writes them. Reaching this branch through the MP4 one
+        # would find no atom it recognises and report an untagged file, so a
+        # FLAC would snapshot as empty and every tag on it would be invisible
+        # to the diff.
+        for k, v in t.items():
+            name = _VORBIS_TEXT.get(k.upper(), k.upper())
+            _add(out, name, keep(_text(v)))
+        pics = getattr(f, "pictures", None)
+        out["_art"] = _art(pics[0].data, pics[0].mime) if pics else None
     return out
 
 
