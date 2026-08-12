@@ -526,25 +526,43 @@ def refresh_loudness(workers, force=False):
         print(f"  {len(seed)} measurements available from "
               f"{os.path.basename(AUDIT_TRUTH)}")
 
-    seeded = gone = 0
+    # A basename claimed by two cache entries cannot be seeded: the seed is
+    # keyed on basename, so both would take one measurement and one of them
+    # would describe a different file, setting that track's gain and its
+    # clipping cap from the wrong audio with no error anywhere. The audit side
+    # already drops ambiguous names; this is the same guard on this side.
+    from collections import Counter as _Counter
+    _by_base = _Counter(os.path.basename(e["path"])
+                        for e in done.values() if e.get("path"))
+    ambiguous = {b for b, n in _by_base.items() if n > 1}
+
+    seeded = gone = ambig = 0
     todo = []
     for fp, entry in done.items():
         path = entry.get("path")
         if entry.get("error") or not path:
             continue
-        if entry.get("loudness_method") and not force:
+        # A SUCCESSFUL measurement is the skip condition, not the presence of
+        # the method field: loudness.ebur128 stamps loudness_method even when
+        # it failed, so keying on it made one timed-out decode permanent. That
+        # entry then has no gain written, forever, without --force.
+        if entry.get("loudness_lufs") is not None and not force:
             continue
-        hit = seed.get(os.path.basename(path))
+        base = os.path.basename(path)
+        hit = None if base in ambiguous else seed.get(base)
         if hit:
             entry.update(hit)
             seeded += 1
             continue
+        if base in ambiguous:
+            ambig += 1
         if not os.path.exists(path):
             gone += 1
             continue
         todo.append((fp, path))
 
     print(f"  seeded {seeded}, {len(todo)} to measure, {gone} files missing, "
+          f"{ambig} measured rather than seeded (basename claimed twice), "
           f"{workers} workers")
 
     measured = 0

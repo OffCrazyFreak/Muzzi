@@ -40,8 +40,9 @@ loudness, dynamics, quality grade.
 
 ### Not built yet
 
-Tag writing, cover art fetch, language tagging, crate/M3U export, provenance
-stamping, hint resolution, YouTube backfill.
+YouTube backfill. Everything else once listed here is built: tag writing,
+cover art fetch, language tagging, crate/M3U export, provenance stamping and
+hint resolution all ship today.
 
 ---
 

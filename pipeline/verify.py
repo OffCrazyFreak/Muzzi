@@ -88,6 +88,17 @@ def read_tags(path):
                 if isinstance(val, bytes):
                     val = val.decode("utf-8", "ignore")
                 out[f"x:{name}"] = str(val)
+        # Vorbis comments are flat upper-case keys, not freeform atoms, so they
+        # need the same namespace or every FLAC and Ogg file reads as carrying
+        # no ReplayGain and no MUZZI_* stamp at all. write_generic writes them
+        # as f[KEY.upper()], and .flac/.ogg/.opus are in AUDIO_EXT, so without
+        # this the exit condition below fails the run on any such file.
+        for k, v in list(t.items()):
+            key = str(k)
+            if ":" in key:
+                continue
+            val = v[0] if isinstance(v, list) else v
+            out.setdefault(f"x:{key.upper()}", str(val))
         out["artist"] = g("artist", "\xa9art")
         out["title"] = g("title", "\xa9nam")
         out["album"] = g("album", "\xa9alb")
@@ -222,13 +233,22 @@ def main():
         print(f"\n  per-file detail -> {args.json}")
     print()
     # Non-zero exit when anything is unprocessed, so this can gate a re-run.
-    # A missing track gain fails too: it is written for EVERY file, from the
-    # waveform alone, so its absence means the write went wrong rather than
-    # that this track was unidentifiable. The peak and target counters are
-    # reported but do not fail -- a file measured before ffmpeg took over has
-    # no peak to write, and that is a stale cache, not a broken build.
+    #
+    # An IMPLAUSIBLE gain fails: a value outside +/-30 dB is a parse or unit
+    # error, and the file is actively wrong.
+    #
+    # A MISSING gain is reported and does not fail. It looks like a write
+    # failure and usually is not: write_tags writes a gain only when the
+    # analysis entry carries a loudness, so a track whose measurement failed,
+    # or which has no analysis entry at all, legitimately has none. Failing on
+    # it would let one transient ffmpeg error fail every later verify run,
+    # which is a gate that cries wolf rather than a gate.
+    #
+    # The peak and target counters are reported for the same reason: a file
+    # measured before ffmpeg took over has no peak to write, and that is a
+    # stale cache rather than a broken build.
     sys.exit(1 if counts.get("unprocessed") or counts.get("unreadable")
-             or counts.get("rg_missing") or counts.get("rg_implausible") else 0)
+             or counts.get("rg_implausible") else 0)
 
 
 if __name__ == "__main__":

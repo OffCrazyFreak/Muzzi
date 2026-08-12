@@ -730,23 +730,28 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
                           f"{audio.get('header_secs')}s")
     txxx("SPECTRAL_CUTOFF_HZ", audio.get("spectral_cutoff_hz"))
     txxx("DYNAMIC_COMPLEXITY", audio.get("dynamic_complexity"))
-    if audio.get("loudness_lufs") is not None:
-        # txxx() overwrites but never deletes, and dst is not re-copied when it
-        # already exists, so anything a previous build or an upstream tagger
-        # wrote outlives us unless it is removed by name. RVA2 goes too: it is
-        # the other ID3 way to say the same thing, and mp3gain and Quod Libet
-        # read it in preference to TXXX.
-        for frame in list(t.getall("TXXX")):
-            if _is_rg_tag(frame.desc):
-                t.delall(f"TXXX:{frame.desc}")
-        t.delall("RVA2")
-        # Apple writes Sound Check as a COMM frame, not TXXX, so the loop above
-        # walks straight past it -- 23 files here carried one and kept it.
-        # Leaving it means two normalisation schemes in one file disagreeing.
-        for frame in list(t.getall("COMM")):
-            if _is_rg_tag(frame.desc):
-                t.delall(frame.HashKey)
+    # Unconditionally, before the write. txxx() overwrites but never deletes,
+    # and dst is not re-copied when it already exists, so anything a previous
+    # build or an upstream tagger wrote outlives us unless it is removed by
+    # name. RVA2 goes too: it is the other ID3 way to say the same thing, and
+    # mp3gain and Quod Libet read it in preference to TXXX.
+    #
+    # Outside the loudness test on purpose. A file we cannot measure is
+    # exactly the file most likely to be carrying somebody else's ReplayGain,
+    # and gating the deletion on having a replacement left every one of them
+    # with a foreign gain and no way to withdraw it.
+    for frame in list(t.getall("TXXX")):
+        if _is_rg_tag(frame.desc):
+            t.delall(f"TXXX:{frame.desc}")
+    t.delall("RVA2")
+    # Apple writes Sound Check as a COMM frame, not TXXX, so the loop above
+    # walks straight past it -- 23 files here carried one and kept it.
+    # Leaving it means two normalisation schemes in one file disagreeing.
+    for frame in list(t.getall("COMM")):
+        if _is_rg_tag(frame.desc):
+            t.delall(frame.HashKey)
 
+    if audio.get("loudness_lufs") is not None:
         peak = audio.get("true_peak")
         gain = rg_gain(audio["loudness_lufs"], peak)
         txxx("REPLAYGAIN_TRACK_GAIN", f"{gain:.2f} dB")
@@ -1043,6 +1048,13 @@ def main():
         # than one that licenses a gain the missing track cannot survive.
         peaks = [p for _, _, p in vals if p]
         peak = max(peaks) if len(peaks) == len(vals) else None
+        if peak is None:
+            # No album peak means no cap, and rg_gain returns the raw figure
+            # when it has nothing to cap against. Writing that would hand the
+            # album a gain the unmeasured track cannot survive, which is the
+            # opposite of what the missing peak was telling us. Skip the album
+            # entirely: track gain still applies, and it is capped per file.
+            continue
         gain = rg_gain(mean, peak)
         if gain is None:
             continue

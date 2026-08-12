@@ -395,11 +395,15 @@ drift apart.
 
 **Anything that edits an output file after tagging invalidates its
 ReplayGain.** `cache/analysis.json` describes the *source* files; `write_tags`
-copies those into `out/_all`. Trimming silence off a copy, re-encoding it, or
-otherwise touching its audio leaves the tags describing audio the file no
-longer contains. Integrated loudness barely moves -- BS.1770 gates silence out
-anyway -- but the true peak does, and with it the clipping cap, which currently
-reduces the gain on 175 files.
+copies those into `out/_all`. Re-encoding a copy, or otherwise touching its
+audio, leaves the tags describing audio the file no longer contains.
+
+Trimming leading silence is the exception, and it is worth naming because it
+looks like the rule. Measured on six trimmed files with cuts of 0.5 to 4.7s,
+integrated loudness moved 0.00 dB on all six and true peak moved 0.00 dB on
+five and 0.10 on the sixth: BS.1770 gates silence out of the integrated
+figure, and a region quiet enough to cut cannot hold the peak. The trim stage
+therefore owes the loudness stage nothing.
 
 `analyze.py --refresh-loudness` will **not** catch this, and cannot: it
 re-measures the source, which did not change. Nor will `--force`. The check
@@ -738,14 +742,16 @@ The same shape exists for loudness, for entries cached before ffmpeg took over
 the measurement:
 
 ```bash
-pipeline/analyze.py --refresh-loudness  # re-measures loudness + true peak
+./.venv/bin/python pipeline/analyze.py --refresh-loudness
 ```
 
-It skips any entry that already carries `loudness_method`, so it is safe to
-re-run, and it seeds from `cache/audit_truth.json` wherever a previous audit
-already measured the output file with the identical ffmpeg command -- which
-costs nothing and is the only way to reach tracks whose source folder has since
-been deleted. `write_tags` consumes `loudness_lufs` and `true_peak`, so run
+It skips any entry that already holds a measured loudness, so it is safe to
+re-run and a failed measurement is retried rather than frozen. It seeds from
+`cache/audit_truth.json` wherever a previous audit already measured the output
+file with the identical ffmpeg command, which costs nothing and is the only way
+to reach tracks whose source folder has since been deleted. A basename claimed
+by two cache entries is measured rather than seeded, because the seed is keyed
+on basename and one of the two would otherwise take the other's numbers. `write_tags` consumes `loudness_lufs` and `true_peak`, so run
 this before any later retag or every peak tag and clipping cap silently
 does nothing.
 
