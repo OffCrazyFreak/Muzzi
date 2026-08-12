@@ -311,7 +311,18 @@ def main():
     ap.add_argument("--allow-shared-read", action="store_true",
                     help="permit reading the main checkout's out/_all, which "
                          "every other session is also using")
+    ap.add_argument("--overwrite", action="store_true",
+                    help="replace an existing snapshot for this label")
     args = ap.parse_args()
+
+    # Re-recording "before" after the change has landed is how a baseline
+    # stops being one: the diff then compares the change against itself and
+    # comes back clean. sample.json is guarded the same way, with --redraw.
+    out_path = os.path.join(args.baseline, args.issue, f"{args.label}.json")
+    if os.path.exists(out_path) and not args.overwrite:
+        sys.exit(f"{out_path} already exists. Pass --overwrite only if this "
+                 f"snapshot was taken at the wrong moment; taking it again "
+                 f"after the change is what makes a diff read clean.")
 
     sample_path = os.path.join(args.baseline, args.issue, "sample.json")
     if not os.path.exists(sample_path):
@@ -363,7 +374,6 @@ def main():
                 if len(v) > 5:
                     print(f"    ... and {len(v) - 5} more")
 
-    out_path = os.path.join(args.baseline, args.issue, f"{args.label}.json")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(doc, fh, indent=1, ensure_ascii=False, sort_keys=True)

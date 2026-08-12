@@ -13,7 +13,9 @@ before making the change, and this splits the diff five ways.
   vanished    stopped being written at all. The silent one.
   appeared    started being written. Sometimes the point, sometimes a double.
 
-Anything in the last three, or in missed, exits 1.
+Missed, collateral, an unresolved target, and a vanish or an appearance that
+was never declared each exit 1. A declared vanish or appearance does not: a
+dedupe fix drops a copy on purpose.
 
 targets.txt takes one entry per line: a source path, a fingerprint or an
 output basename, optionally followed by a tab and the single field expected

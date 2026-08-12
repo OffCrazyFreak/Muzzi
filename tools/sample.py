@@ -228,6 +228,14 @@ def main():
                 added += 1
         print(f"  {sel}: {len(hits)} tracks ({added} not already in the draw)")
 
+    # An empty sample is the worst outcome this tool has: it snapshots
+    # nothing, diffs clean, and exits 0, which reads as proof that a change
+    # is safe. Fail here, where the cause is still visible.
+    if not chosen:
+        sys.exit(f"--pct {args.pct} drew no track of {len(tracks)} and no "
+                 f"--add named one. An empty sample verifies nothing and "
+                 f"every check downstream of it would pass.")
+
     chosen.sort(key=lambda t: t["path"])
     for t in chosen:
         t["via"] = "hash" if why[t["path"]] == "hash" else "explicit"

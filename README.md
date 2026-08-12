@@ -584,9 +584,10 @@ $P tools/snapdiff.py --issue m4a-genres
 **missed** (declared and unchanged, so the fix did nothing), **collateral**
 (changed and never declared) and **vanished** or **appeared** (no longer
 written at all, or written now and not before). It exits non-zero on missed,
-on collateral, and on an undeclared appearance or disappearance. Declaring a
-track that a fix is meant to drop marks the removal intended, so a dedupe fix
-does not report its own success as a regression.
+on collateral, on a target that resolves to no sampled track, and on an
+undeclared appearance or disappearance. Declaring a track that a fix is meant
+to drop marks the removal intended, so a dedupe fix does not report its own
+success as a regression.
 
 Declaring the targets first is what makes any of this possible: without an
 intent to compare against, a diff can only say what moved, not whether it
@@ -601,7 +602,13 @@ the library:
 ```bash
 $P pipeline/write_tags.py --only baseline/m4a-genres/paths.txt \
    --out /tmp/out/_all
+$P tools/snapshot.py --issue m4a-genres --label before \
+   --level out --out-dir /tmp/out/_all
 ```
+
+`--out-dir` has to name the same scratch directory the subset was built into.
+Left off, it defaults to `out/_all` beside this checkout, and the snapshot
+records a build that has nothing to do with the one just made.
 
 `baseline/` is gitignored: it lists real filenames, so it describes the library
 the same way `hints.tsv` does. Delete `baseline/<issue>/` when the issue is
