@@ -17,6 +17,9 @@ yt_playlists.json
 survey_report.json
 # BPM corrections are keyed by real filenames, so this is a track listing.
 config/bpm_overrides.json
+# Session audit reports quote the transcripts verbatim, so they carry whatever
+# was discussed. Ignored by default rather than remembered case by case.
+audit/
 
 # ------------------------------------------------------- generated + bulky
 # every API response, fingerprints, analysis, logs
