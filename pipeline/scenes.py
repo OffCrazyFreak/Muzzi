@@ -37,6 +37,8 @@ from collections import Counter
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
+from pipeline.genres import allow  # noqa: E402
+
 CONFIG = os.path.join(HERE, "config", "scenes.json")
 TAGS = os.path.join(HERE, "cache", "lastfm_tags.json")
 ORIGIN = os.path.join(HERE, "cache", "artist_origin.json")
@@ -46,7 +48,10 @@ ORIGIN = os.path.join(HERE, "cache", "artist_origin.json")
 _LASTFM = [
     (r"^ex[- ]?yu[- ]rock$", "Ex-YU"),
     (r"^ex[- ]?yu$", "Ex-YU"),
-    (r"^novi val$|^new wave$", "Novi Val"),
+    # Novi val is the Yugoslav new wave, which is the Ex-YU era under another
+    # name rather than a genre of its own. Mapped straight to the name that
+    # survives the gate, so the table and genres.allow() cannot disagree.
+    (r"^novi val$|^new wave$", "Ex-YU"),
     (r"^turbo[- ]?folk$|^pop[- ]?folk$", "Turbofolk"),
     (r"^serbian rap$|^serbian hip[- ]?hop$", "Serbian Rap"),
     (r"^croatian rap$|^croatian hip[- ]?hop$|^cro rap$", "Croatian Rap"),
@@ -65,7 +70,7 @@ _DISCOGS = [
     (r"^ethno[- ]?pop$", "Ethno-Pop"),
     (r"^europop$", "Europop"),
     (r"^eurodance$|^euro house$", "Eurodance"),
-    (r"^new wave$", "Novi Val"),
+    (r"^new wave$", "Ex-YU"),
 ]
 _DISCOGS = [(re.compile(p, re.I), name) for p, name in _DISCOGS]
 
@@ -106,7 +111,10 @@ _DEEZER_EN = {
     "filmovi/igrice": "Soundtrack",
     "rap/hip hop": "Hip-Hop",
     "techno/house": "Electronic",
-    "singer & songwriter": "Singer-Songwriter",
+    # "singer & songwriter" used to be translated to "Singer-Songwriter",
+    # which described who made a record rather than what it sounds like and
+    # reached exactly one track. genres.allow() drops it now, so the
+    # translation would only have produced a name that dies one line later.
 }
 
 
@@ -234,11 +242,37 @@ def _shared_tags():
     return c["shared"]
 
 
+def _deezer(name):
+    """-> the whitelisted genre a Deezer answer means, or None.
+
+    One helper because there are two Deezer paths: the ordinary floor at the
+    bottom of genre_for, and the ISRC branch above it. The ISRC branch used
+    to skip the Croatian-to-English table entirely, so ten tracks whose genre
+    Deezer gave as "Rap/Hip Hop" arrived untranslated and lost their genre.
+    """
+    if not name:
+        return None
+    return allow(_DEEZER_EN.get(name.strip().lower(), name))
+
+
+def scene_names():
+    """-> every scene name config/scenes.json defines.
+
+    export.py needs these to tell a hand-curated crate from a generic genre,
+    and reading them from the config means adding a scene does not also mean
+    editing a second list that would otherwise silently disagree.
+    """
+    return [name for name, _members in _load()["scenes"]]
+
+
 def genre_for(artist, title=None, year=None, discogs_styles=None,
               deezer_genre=None):
     """-> (genre, why) picking the most specific evidence available."""
     scene = scenes_for(artist, year)
     if scene:
+        # Not gated: scenes.json is hand-written, so it is already a
+        # whitelist. Gating it would mean a scene you add here vanishes
+        # unless you also remember to add it to genres.GENRES.
         return scene[0], "scene list"
 
     c = _load()
@@ -249,22 +283,31 @@ def genre_for(artist, title=None, year=None, discogs_styles=None,
     # rap. Having already judged those tags to be about a different artist,
     # they cannot be used for genre either.
     if (c["origin"].get(fold(artist)) or {}).get("why") == "isrc":
-        return (deezer_genre, "deezer") if deezer_genre else (None, None)
+        dz = _deezer(deezer_genre)
+        return (dz, "deezer") if dz else (None, None)
 
     a_tags = c["artist_tags"].get(fold(artist)) or []
     t_tags = c["track_tags"].get(fold(f"{artist}|{title}")) or []
     # Track tags first: a rapper's acoustic ballad is tagged as itself.
+    # Every answer below goes through genres.allow(), and a source whose
+    # answer the gate drops is treated as having had no answer, so the next
+    # source still gets its turn rather than the track losing its genre.
     for tags, why in ((t_tags, "lastfm track"), (a_tags, "lastfm artist")):
-        got = _from_tags(tags, _LASTFM)
+        got = allow(_from_tags(tags, _LASTFM))
         if got:
             return got, why
 
-    got = _from_tags(discogs_styles or [], _DISCOGS)
+    got = allow(_from_tags(discogs_styles or [], _DISCOGS))
     if got:
         return got, "discogs style"
 
     if deezer_genre:
-        return _DEEZER_EN.get(deezer_genre.strip().lower(), deezer_genre), "deezer"
+        # This is the line that let "Dance" onto 85 files: whatever Deezer
+        # answered went straight to a TCON frame. Now it has to be a name we
+        # chose, or it is not a genre.
+        got = _deezer(deezer_genre)
+        if got:
+            return got, "deezer"
     # Nothing specific: fall back to the heaviest Last.fm tag -- but only one
     # that several artists in this library share. A blocklist cannot keep up
     # with free text, and one-off tags produced genres called "5 Stars",
@@ -280,7 +323,12 @@ def genre_for(artist, title=None, year=None, discogs_styles=None,
             name = t.get("name") if isinstance(t, dict) else t
             w = t.get("count", 0) if isinstance(t, dict) else 0
             if name and w >= 50 and not _JUNK.match(name.strip()):
-                return titlecase(name), "lastfm broad"
+                # The other source that used to write free text. "5 Stars",
+                # "Gazda Paja" and "Glee" all arrived through here, and the
+                # shared-tag test alone never caught them.
+                got = allow(titlecase(name))
+                if got:
+                    return got, "lastfm broad"
     return None, None
 
 
