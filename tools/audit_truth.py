@@ -15,9 +15,6 @@ import json
 import os
 import re
 import subprocess
-import sys
-
-HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 _I = re.compile(r"^\s*I:\s*(-?[\d.]+)\s*LUFS", re.M)
 _PEAK = re.compile(r"Peak:\s*(-?[\d.]+)\s*dBFS")

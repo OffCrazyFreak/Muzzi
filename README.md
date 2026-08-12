@@ -569,22 +569,29 @@ what it does and why it does it that way.
 claims to describe, `tools/` decodes the finished library and compares:
 
 ```bash
-tools/audit_truth.py  out/_all cache/audit_truth.json    # ffprobe + ffmpeg ebur128
-tools/audit_cutoff.py out/_all cache/audit_cutoff.json   # re-runs analyze.py's own code
-tools/audit_compare.py                                   # joins both against the tags
+# duration, bitrate and loudness, from ffprobe and ffmpeg
+./.venv/bin/python tools/audit_truth.py out/_all cache/audit_truth.json
+# spectral cutoff, through analyze.py's own code
+./.venv/bin/python tools/audit_cutoff.py out/_all cache/audit_cutoff.json
+# joins both against the written tags
+./.venv/bin/python tools/audit_compare.py
 ```
 
 They report and change nothing. `audit_cutoff.py` deliberately imports
-`spectral_cutoff`, `grade_quality` and `real_bitrate` from `pipeline/analyze.py`
-rather than reimplementing them, so it measures the pipeline instead of a
-lookalike -- an earlier copy of the bitrate read reproduced the exact AAC bug
-the audit was meant to catch.
+`spectral_cutoff`, `grade_quality` and `real_bitrate` from
+`pipeline/analyze.py` rather than reimplementing them, so it measures the
+pipeline instead of a lookalike: an earlier copy of the bitrate read
+reproduced the exact AAC bug the audit was meant to catch.
+
+Count what comes back rather than the exit code. `audit_compare` reports the
+files it could not measure before any mismatch line, because a run where
+everything failed otherwise reads as a run where nothing was wrong.
 
 If a container is found to misreport its bitrate, correct the cache without a
-full re-analysis:
+full re-analysis. Header only, no decoding, seconds rather than hours:
 
 ```bash
-pipeline/analyze.py --refresh-bitrate   # header only, no decoding, seconds not hours
+./.venv/bin/python -m pipeline.analyze --refresh-bitrate
 ```
 
 `dedupe` consumes `bitrate_kbps`, so run this before any later dedupe.
