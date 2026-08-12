@@ -587,7 +587,23 @@ def main():
                     help="placeholders: {artist} {title} {album} {year} {bpm} "
                          "{camelot} {key} {quality} {lang}. "
                          'e.g. "{bpm} - {artist} - {title}"')
+    # Rebuild a subset into a scratch output, so a change can be verified
+    # against a sample without touching the real library or waiting for 1700
+    # files. The filter is applied late, after album gain, identity
+    # inheritance and the common root have all been computed from the full
+    # set: applied early it would quietly produce different tags and a
+    # different folder layout than a full build, and the diff against that
+    # build would then be noise.
+    ap.add_argument("--only", metavar="LIST",
+                    help="write only the tracks listed in this file, one "
+                         "source path or fingerprint per line")
     args = ap.parse_args()
+
+    # --prune deletes everything this run did not write, and under --only that
+    # is the rest of the library. Refuse rather than warn.
+    if args.only and args.prune:
+        sys.exit("--only with --prune would delete every file outside the "
+                 "subset. Prune from a full build instead.")
 
     rows = json.load(open(REVIEW))
     analysis = {v["path"]: v for v in json.load(open(ANALYSIS)).values()
@@ -723,6 +739,45 @@ def main():
         if dirs:
             common_root = os.path.commonpath(list(dirs)) if len(dirs) > 1 \
                 else os.path.dirname(list(dirs)[0])
+
+    # Everything above this line was computed from the whole library on
+    # purpose: album gain is a mean over an album's tracks, the identity of a
+    # kept file can come from a duplicate copy, and the output folder layout
+    # is relative to the deepest directory all sources share. Narrow the set
+    # any earlier and a subset build writes different tags to different paths
+    # than the full build it is supposed to be compared against.
+    if args.only:
+        wanted, unknown = set(), []
+        by_fp = {fp: v.get("path") for fp, v in
+                 json.load(open(ANALYSIS)).items() if v.get("path")}
+        known = {r["path"] for r in json.load(open(REVIEW)) if r.get("path")}
+        with open(args.only, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.split("#")[0].strip()
+                if not line:
+                    continue
+                path = by_fp.get(line, line)
+                if path in known:
+                    wanted.add(path)
+                else:
+                    unknown.append(line)
+        if unknown:
+            print(f"  {len(unknown)} entries in {args.only} match no known "
+                  f"track:")
+            for u in unknown[:10]:
+                print(f"    {u}")
+        # A subset that silently came out empty writes nothing, reports no
+        # error, and reads exactly like a clean run.
+        dropped = [p for p in wanted if p not in {r["path"] for r in rows}]
+        rows = [r for r in rows if r.get("path") in wanted]
+        if not rows:
+            sys.exit(f"--only {args.only} selected no writable track "
+                     f"({len(dropped)} of them are duplicate copies that are "
+                     f"never written)")
+        if dropped:
+            print(f"  {len(dropped)} requested tracks are duplicate copies "
+                  f"and are not written")
+        print(f"  --only: writing {len(rows)} tracks")
 
     stats = {"identified": 0, "audio_only": 0, "promoted_by_lyrics": 0,
              "missing_audio": 0, "errors": 0, "with_art": 0, "with_genre": 0}
@@ -869,7 +924,13 @@ def main():
     # visibly wrong -- it is a correctly tagged copy of a song that also exists
     # under a better name -- so it will never be noticed on the phone except as
     # the same track appearing twice.
-    if not args.dry_run and stats["errors"] == 0:
+    # Under --only every file outside the subset is "not written by this run",
+    # so the stale report would list the rest of the library as leftovers.
+    # That is not a finding, it is the flag working, and printing it would
+    # train people to ignore the one report that catches real duplicates.
+    if args.only:
+        print("  --only: stale-file report skipped, this run wrote a subset\n")
+    elif not args.dry_run and stats["errors"] == 0:
         stale = []
         for dp, _, names in os.walk(args.out):
             for n in names:

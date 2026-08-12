@@ -531,12 +531,13 @@ session teardown kills it mid-run.
 ```
 run.py                  the only entry point you need
 pipeline/               one file per stage, each runnable alone
-tools/                  standalone helpers (export_cookies.py)
+tools/                  standalone helpers (sample.py, snapshot.py, snapdiff.py)
 config/                 keys and hand-maintained corrections
 cache/                  every stage's output; safe to delete, expensive to rebuild
 out/_all                the result
 out/playlists           .m3u playlists
 review/                 numbered spreadsheets, only what needs your eyes
+baseline/               frozen verification samples and before/after snapshots
 hints.tsv               every answer you have ever given
 ```
 
@@ -560,6 +561,44 @@ it holds every answer you have given, and nothing can reproduce it.
 
 Each `pipeline/*.py` runs standalone with `--help` and its docstring explains
 what it does and why it does it that way.
+
+## Verifying a change
+
+One track is not evidence. A fix checked against the track that prompted it
+cannot show the two things that actually go wrong: a fix that did nothing to
+most of what it was meant to fix, and a fix that also changed something else.
+
+Freeze a sample, snapshot it, change the code, snapshot it again, diff:
+
+```bash
+tools/sample.py --issue m4a-genres --add "artist:Rasta"   # freeze a 10%
+$EDITOR baseline/m4a-genres/targets.txt                   # BEFORE the change
+tools/snapshot.py --issue m4a-genres --label before
+# ... make the change ...
+tools/snapshot.py --issue m4a-genres --label after
+tools/snapdiff.py --issue m4a-genres
+```
+
+`snapdiff.py` sorts every difference into **fixed** (declared and changed),
+**missed** (declared and unchanged, so the fix did nothing), **collateral**
+(changed and never declared) and **vanished** (no longer written at all). It
+exits non-zero on anything but fixed. Declaring the targets first is what makes
+the last three possible: without an intent to compare against, a diff can only
+say what moved, not whether it should have.
+
+`--level cache` (the default) reads the stage caches and takes seconds.
+`--level out` reads what actually landed in `out/_all`: filenames, tags, the
+`.lrc` sidecar, artwork and playlist membership in both M3U forms. Build that
+output for the sample alone, into a scratch directory, rather than rebuilding
+the library:
+
+```bash
+pipeline/write_tags.py --only baseline/m4a-genres/paths.txt --out /tmp/out/_all
+```
+
+`baseline/` is gitignored: it lists real filenames, so it describes the library
+the same way `hints.tsv` does. Delete `baseline/<issue>/` when the issue is
+closed.
 
 ---
 
