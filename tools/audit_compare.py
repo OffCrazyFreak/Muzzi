@@ -61,9 +61,16 @@ def tags_of(path):
 
 
 def num(v):
+    """-> float from a tag value, whatever unit it carries.
+
+    Splitting on whitespace rather than stripping one known suffix: written
+    values are "-6.30 dB", "0.512861" and "-14.00 LUFS", and a stripper that
+    only knew about " dB" silently returned None for every reference-loudness
+    tag, which read as "no file names its target" rather than as a parse bug.
+    """
     try:
-        return float(str(v).replace(" dB", "").strip())
-    except (TypeError, ValueError):
+        return float(str(v).split()[0])
+    except (TypeError, ValueError, IndexError):
         return None
 
 
