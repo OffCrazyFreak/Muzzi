@@ -154,7 +154,7 @@ def main():
         return any(k.startswith(("analysis.", "review.")) for k in rec)
 
     fixed, missed, collateral = [], [], []
-    vanished, appeared = [], []
+    vanished, appeared, undeclared_gone = [], [], []
     collateral_fields, changed_tracks = Counter(), set()
 
     for p in sorted(set(b_tracks) | set(a_tracks)):
@@ -164,11 +164,24 @@ def main():
         # A track that stopped being written is not a field change, it is a
         # track that left the library. A field-level diff shows that as a
         # handful of blanked tags, which reads like a tagging tweak.
+        #
+        # Declaring the track makes the disappearance intended, because
+        # sometimes it is the whole point: a dedupe fix drops a copy on
+        # purpose. Undeclared ones still fail. A tool that calls every
+        # intended removal a regression is a tool people learn to ignore.
         if present(b) and not present(a):
-            vanished.append(f"{name}  was {b.get('out.relpath', 'present')}")
+            mark = "  (declared)" if p in targets else ""
+            vanished.append(f"{name}  was "
+                            f"{b.get('out.relpath', 'present')}{mark}")
+            if p not in targets:
+                undeclared_gone.append(p)
             continue
         if present(a) and not present(b):
-            appeared.append(f"{name}  now {a.get('out.relpath', 'present')}")
+            mark = "  (declared)" if p in targets else ""
+            appeared.append(f"{name}  now "
+                            f"{a.get('out.relpath', 'present')}{mark}")
+            if p not in targets:
+                undeclared_gone.append(p)
             continue
 
         diff = changes(b, a)
@@ -200,7 +213,8 @@ def main():
     show("MISSED      declared and unchanged, the fix did nothing", missed)
     show("COLLATERAL  changed and never declared", collateral)
     show("VANISHED    no longer written at all", vanished)
-    show("APPEARED    written now, was not before", appeared)
+    show("APPEARED    written now, was not before", appeared,
+         "  (a declared one is intended; an undeclared one is not)")
 
     if collateral:
         print("\n  collateral by field:")
@@ -212,9 +226,12 @@ def main():
           f"{len(targets)} declared")
     print(f"  fixed {len(fixed)}, missed {len(missed)}, "
           f"collateral {len(collateral)}, vanished {len(vanished)}, "
-          f"appeared {len(appeared)}")
+          f"appeared {len(appeared)}"
+          + (f" ({len(undeclared_gone)} of those undeclared)"
+             if undeclared_gone else ""))
 
-    bad = len(missed) + len(collateral) + len(vanished) + len(unresolved)
+    bad = (len(missed) + len(collateral) + len(undeclared_gone)
+           + len(unresolved))
     if bad:
         print("\n  NOT CLEAN. Every line above is either a fix that did not "
               "land or a change nobody asked for.")
