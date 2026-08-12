@@ -55,10 +55,11 @@ SHEETS = [
     ("3 - check the rest", "verify",
      "Everything else, least confident first. Only the top rows need you."),
     ("4 - trim and lyric timing", "trim",
-     "Timing, not identity. Nothing here is wrong yet: these are the files "
-     "where the automatic decision was declined or could not be checked. "
-     "In `hint` type trim=n to keep a file at full length, or trim=y to cut "
-     "the silence anyway. Leave it blank to change nothing."),
+     "Timing and lyric fit, not identity. Nothing here is wrong yet: these "
+     "are the files where the automatic decision was declined or could not be "
+     "checked. Fixable rows come first, the rest are recorded so the counts "
+     "add up. In `hint` type trim=n to keep a file at full length, or trim=y "
+     "to cut the silence anyway. Leave it blank to change nothing."),
 ]
 OUT = os.path.join(HERE, "cache", "review.json")
 DUPES = os.path.join(HERE, "cache", "duplicates.json")
@@ -67,6 +68,8 @@ FN_GUESS = os.path.join(HERE, "cache", "filename_guess.json")
 WEBMATCH = os.path.join(HERE, "cache", "webmatch.json")
 SILENCE = os.path.join(HERE, "cache", "silence.json")
 ALIGN = os.path.join(HERE, "cache", "lyric_align.json")
+LYRICS = os.path.join(HERE, "cache", "lyrics.json")
+LYRIC_VERIFY = os.path.join(HERE, "cache", "lyric_verify.json")
 
 
 def _load(path):
@@ -289,19 +292,52 @@ def timing_rows(rows):
     total confidence and still open with eight seconds of dead air, or carry a
     lyric sheet written for a different recording.
 
-    Three kinds of row, worst first:
+    Four kinds of row, worst first:
 
       * head silence too long to cut blind -- almost always a quiet intro
         rather than dead air, and cutting it would decapitate the song
       * the lyric sheet's duration disagrees with the file by more than ten
         seconds, so it belongs to another recording and no offset can fix it
+      * write_tags refused the sheet, or refused its timings
       * trimmed, but the lyric alignment could not be measured
+
+    The refusals are here rather than in a sheet of their own because they are
+    the same question: is this sheet describing this recording. lyric_align
+    files a row at ten seconds out; write_tags refuses the timings at two, so
+    without this the tracks between those thresholds went quiet with nothing
+    to look at.
+
+    The gates are imported rather than restated. A copy here would keep
+    reporting after write_tags changed its mind, which is the failure the
+    audit tools avoid the same way.
 
     A cut that was wanted and did not happen is not here: write_tags counts it
     in stats["trim_failed"] and writes no cache, so this sheet cannot see it.
     """
+    from pipeline.write_tags import lyrics_trustworthy, lyrics_timing_ok
+
     sil = _load(SILENCE)
     align = _load(ALIGN)
+    lyr = _load(LYRICS)
+    verified = {v.get("path"): v for v in _load(LYRIC_VERIFY).values()
+                if isinstance(v, dict) and v.get("path")}
+    secs = {}
+    for v in _load(ANALYSIS).values():
+        if v.get("path"):
+            secs[v["path"]] = v.get("decoded_secs")
+    # Said plainly, because "wrong_artist" in a spreadsheet cell is not an
+    # instruction. Each one names what a human would actually do about it.
+    _SAY = {
+        "wrong_artist": "lyrics are by a different artist; if it is the same "
+                        "performer under another name, add it to "
+                        "config/artist_aliases.json",
+        "wrong_title": "lyrics are a different song by the right artist",
+        "unverifiable_match": "lyrics predate the match record, so nothing "
+                              "says which song they belong to",
+        "duration_mismatch": "lyric sheet was timed for a different edit, so "
+                             "the words are kept and the timings dropped",
+        "instrumental": "no words found in the audio, but lyrics were fetched",
+    }
     out = []
     for r in rows:
         p = r.get("path")
@@ -320,18 +356,39 @@ def timing_rows(rows):
               and a and a.get("status") != "measured"):
             why.append(f"cutting {s['cut']:.1f}s, lyric timing unverified "
                        f"({a.get('status')})")
+        art, tit = r.get("proposed_artist"), r.get("proposed_title")
+        entry = lyr.get(f"{art}|{tit}".lower()) if (art and tit) else None
+        if isinstance(entry, dict) and (entry.get("synced") or entry.get("plain")):
+            ok, reason = lyrics_trustworthy(entry, verified.get(p), art, tit)
+            if ok and entry.get("synced"):
+                ok, reason = lyrics_timing_ok(entry, secs.get(p),
+                                              s.get("cut", 0.0))
+            # The ten-second rows above already say this, in more detail.
+            if not ok and a.get("status") != "wrong_recording":
+                why.append(f"{_SAY.get(reason, reason)} "
+                           f"(matched {entry.get('matched') or 'nothing'})")
         if not why:
             continue
         row = dict(r)
         row["reasons"] = why
         out.append(row)
-    # Longest silence first, then biggest version mismatch: the rows where
-    # doing nothing costs the most.
+    # Actionable first, then longest silence, then biggest version mismatch:
+    # the rows where doing nothing costs the most, and where doing something
+    # is possible at all.
+    #
+    # The ordering matters more than it used to. Refused timings outnumber
+    # every other kind of row roughly five to one, and they are the one kind a
+    # human cannot fix: the words are already kept and no answer changes that.
+    # Sorted by size alone they would bury the few dozen rows where naming an
+    # alias actually repairs a track.
     def worst(r):
         p = r.get("path")
         s, a = sil.get(p) or {}, align.get(p) or {}
-        return -(max(s.get("lead") or 0,
-                     abs((a.get("duration_delta") or 0)) / 10.0))
+        fixable = any("artist_aliases" in w or "different song" in w
+                      for w in r["reasons"])
+        return (0 if fixable else 1,
+                -(max(s.get("lead") or 0,
+                      abs((a.get("duration_delta") or 0)) / 10.0)))
     return sorted(out, key=worst)
 
 
