@@ -87,8 +87,63 @@ _FEAT = re.compile(r"\s*(?:\(|\[)?\s*\b(?:feat|ft|featuring)\b\.?\s+.*$", re.I)
 
 # ---------------------------------------------------------------- matching
 
+# NFKD decomposes an accented letter into a base plus a combining mark, which
+# is how c-caron and friends already fold to ASCII. These do not decompose:
+# the stroke is part of the letter, not a mark on it. Without them, the letter
+# survives NFKD and is then destroyed by the [^a-z0-9] pass, so a name is not
+# merely mis-folded, it loses characters:
+#
+#   "Dorde Balasevic" written with strokes -> "or e balasevic"
+#
+# and fit() against the plain spelling scores 0.25, under the 0.5 gate every
+# caller uses. 32 review rows carry the stroked d. Whisper's own text
+# normalizer keeps the same table for the same reason.
+# The replacement is the romanization the language actually uses, not the
+# nearest single letter. Serbian and Croatian write d-with-stroke as "dj", so
+# folding it to a bare "d" fixes the character loss and still misses: it turns
+# the stroked spelling into "dorde" while the plain spelling everyone types is
+# "djordje", and fit() scores that 0.33 -- under the gate, same as before.
+#
+# U+00F0 ETH is a different letter that looks identical in most fonts and is
+# common mojibake for the stroked d. It stays "d" rather than "dj": it is
+# genuinely Icelandic, and one library's mojibake is not a reason to mis-fold
+# a letter. Measured cost of that choice here: one row, "A u Meðuvremenu",
+# which folds to "meduvremenu" where the true spelling gives "medjuvremenu".
+# If eth-for-d ever becomes common, fix the filenames, not this table.
+_UNDECOMPOSED = str.maketrans({
+    # Title case, not "DJ": norm() lowercases anyway, but lyrics_fetch reuses
+    # this table to build search strings a human might have typed, and nobody
+    # types "DJordje".
+    "đ": "dj", "Đ": "Dj",   # d with stroke, Serbian/Croatian -> "dj"
+    "ð": "d", "Ð": "D",     # eth, Icelandic
+    "ł": "l", "Ł": "L",     # l with stroke, Polish
+    "ø": "o", "Ø": "O",     # o with stroke, Norwegian/Danish
+    "æ": "ae", "Æ": "AE",   # ash
+    "œ": "oe", "Œ": "OE",   # ethel
+    "ß": "ss",              # sharp s
+    "þ": "th", "Þ": "TH",   # thorn
+    # Same class, reached from Turkish and Maltese credits. Listed so the
+    # character loss this table exists to stop cannot return through a letter
+    # nobody thought of.
+    "ı": "i", "İ": "I",     # dotless i / dotted I, Turkish
+    "ħ": "h", "Ħ": "H",     # h with stroke, Maltese
+    "ŧ": "t", "Ŧ": "T",     # t with stroke
+})
+
+# The agreement below which a name is a different name. It lives beside fit()
+# because every caller that draws this line also calls fit(), and a copy in
+# each of them is how the audit tool started grading on its own number.
+MIN_FIT = 0.5
+
+# How far a lyric sheet's own duration may sit from the recording's before its
+# timings are refused. 2s is LRCLIB's /api/get signature tolerance, and what
+# LRCLIBee and Music Assistant both require.
+MAX_DURATION_DELTA = 2.0
+
+
 def norm(s):
-    s = unicodedata.normalize("NFKD", (s or "").lower())
+    s = (s or "").lower().translate(_UNDECOMPOSED)
+    s = unicodedata.normalize("NFKD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
     return re.sub(r"[^a-z0-9]+", " ", s).strip()
 

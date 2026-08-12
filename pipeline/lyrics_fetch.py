@@ -28,6 +28,7 @@ import re
 import sys
 import threading
 import time
+import unicodedata
 
 # LRCLIB is a free, donation-funded community service with no published limit.
 # Two per second is brisk enough to finish 3000 tracks in ~25 minutes and light
@@ -36,8 +37,27 @@ RATE = 2.0
 MAX_RETRIES = 4
 RETRY_STATUS = {429, 500, 502, 503, 504}
 
+# The agreement below which a name is a different name. Shared by the picker,
+# the fallback rule and write_tags' trust gate so all three draw the line in
+# the same place. Defined next to fit() in webmatch and re-exported here,
+# because importing this module to read one float pulls in the HTTP client.
+from pipeline.webmatch import MIN_FIT  # noqa: F401  re-exported
+
+# Which selection rules produced a cache entry. Bump when a change would pick
+# a *different* hit than the entry already holds, so entries chosen by the old
+# rules can be found and re-judged instead of being trusted forever.
+#
+#   1  original: ranked on (artist, synced, duration). No title comparison,
+#      and a wrong-artist hit could ship as a fallback.
+#   2  title compared in the picker, wrong-artist fallbacks recorded as such,
+#      and artist_fit/title_fit stamped on every entry.
+SELECTOR = 2
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from pipeline.webmatch import fit  # noqa: E402
+# _UNDECOMPOSED is shared rather than copied: a query variant that folded a
+# letter differently from the comparison that judges the answer would ask for
+# one spelling and then reject what came back.
+from pipeline.webmatch import fit, _UNDECOMPOSED  # noqa: E402
 
 BASE = "https://lrclib.net/api"
 from pipeline.useragent import UA  # noqa: E402
@@ -90,6 +110,29 @@ _TRANSLIT = [("w", "v"), ("y", "j"), ("x", "ks"), ("qu", "kv"), ("ck", "k"),
              ("ph", "f"), ("th", "t")]
 
 
+def deaccent(s):
+    """-> the same words with the diacritics taken off, or None if unchanged.
+
+    Query-side only, and deliberately not the same job as webmatch.norm(). That
+    one folds both sides of a comparison we control, so it can flatten
+    punctuation and case too. This one has to produce something a human might
+    have typed into LRCLIB's upload form, so it keeps the spacing and
+    punctuation and only removes the marks: "Neću" -> "Necu", and the stroked
+    d follows the same "dj" romanization norm() uses, "Rođendan" -> "Rodjendan".
+
+    Worth having because our comparison already folds these but our *questions*
+    do not. Measured on this library: titles carrying diacritics are missing
+    synced lyrics at 27.1% against 14.1% for titles without, which is a search
+    failure and not an absence -- LRCLIB holds whichever spelling the uploader
+    used, and plenty of them do not type the marks.
+    """
+    if not s:
+        return None
+    out = unicodedata.normalize("NFKD", s.translate(_UNDECOMPOSED))
+    out = "".join(c for c in out if not unicodedata.combining(c))
+    return out if out != s else None
+
+
 def title_variants(title):
     """-> [title, ...] alternative spellings worth asking for."""
     if not title:
@@ -100,6 +143,9 @@ def title_variants(title):
             # Preserve the original case pattern well enough to read; LRCLIB
             # matches case-insensitively anyway.
             out.append(re.sub(a, b, title, flags=re.I))
+    bare = deaccent(title)
+    if bare:
+        out.append(bare)
     seen, uniq = set(), []
     for t in out:
         if t.lower() not in seen:
@@ -109,14 +155,26 @@ def title_variants(title):
 
 
 def artist_variants(artist):
-    """Full credit first, then the lead artist alone."""
+    """Full credit first, then the lead artist alone, then both unaccented."""
     if not artist:
         return []
     out = [artist]
     parts = [p for p in _ARTIST_SPLIT.split(artist) if p.strip()]
     if parts and parts[0].strip() != artist.strip():
         out.append(parts[0].strip())
-    return out
+    # Same reason as title_variants: LRCLIB holds whichever spelling the
+    # uploader typed, and "Halid Beslic" is filed far more often than the
+    # correctly accented form.
+    for a in list(out):
+        bare = deaccent(a)
+        if bare:
+            out.append(bare)
+    seen, uniq = set(), []
+    for a in out:
+        if a.lower() not in seen:
+            seen.add(a.lower())
+            uniq.append(a)
+    return uniq
 
 
 def _get(session, path, params):
@@ -159,8 +217,8 @@ def _hits_from(payload):
     return [h for h in payload if isinstance(h, dict)]
 
 
-def _pick(hits, duration, artist=None):
-    """Prefer the right artist, then synced, then the closest duration.
+def _pick(hits, duration, artist=None, title=None):
+    """Prefer the right artist, then the right song, then synced, then duration.
 
     LRCLIB routinely holds several entries for one song (7 for Rasta's
     "Euforija"). Taking the first is arbitrary; taking the nearest duration
@@ -170,6 +228,15 @@ def _pick(hits, duration, artist=None):
     JoelB's "MAMBA" for Grse's, and a Polish "Kawasaki" for Rasta's -- whole
     songs in the wrong language, embedded as if they were right, and then used
     to decide the track's language too.
+
+    Title has to come second, and it did not used to be here at all. Ranking
+    the right artist's hits by duration alone picks whichever of their songs is
+    closest in runtime, which is a different song sung by the right voice --
+    the hardest kind of wrong to notice, because the language and the singer
+    are both correct. Measured on this library: 15 sidecars carried another
+    song by the correct artist. A duration check cannot catch these, and it is
+    not a small residue: of 94 wrong matches, only 58 also failed a 5 s
+    duration gate, so 36 needed this comparison specifically.
     """
     if not hits:
         return None
@@ -177,29 +244,92 @@ def _pick(hits, duration, artist=None):
     def score(h):
         d = h.get("duration")
         off = abs(d - duration) if (d and duration) else 999
-        wrong_artist = 0
+        wrong_artist = wrong_title = 0
         if artist and h.get("artistName"):
-            wrong_artist = 0 if fit(artist, h["artistName"]) >= 0.5 else 1
-        return (wrong_artist, 0 if h.get("syncedLyrics") else 1, off)
+            wrong_artist = 0 if fit(artist, h["artistName"]) >= MIN_FIT else 1
+        if title and h.get("trackName"):
+            wrong_title = 0 if fit(title, h["trackName"]) >= MIN_FIT else 1
+        return (wrong_artist, wrong_title,
+                0 if h.get("syncedLyrics") else 1, off)
     return sorted(hits, key=score)[0]
+
+
+def _rescore(entry, artist, title):
+    """-> the entry with artist_fit/title_fit filled in, or None if it cannot be.
+
+    An entry that recorded which hit it took can be re-judged against stricter
+    rules with no network call at all: the names are already in 'matched'. That
+    is what keeps a selector bump cheap. Only entries that fail the new rules,
+    or that never recorded a hit, have to go back to LRCLIB.
+    """
+    matched = entry.get("matched") or ""
+    if " - " not in matched:
+        return None                       # legacy shape, nothing to judge
+    ma, _, mt = matched.partition(" - ")
+    entry["artist_fit"] = round(fit(artist, ma), 3)
+    entry["title_fit"] = round(fit(title, mt), 3)
+    return entry
+
+
+def _good(entry):
+    """-> True when a re-scored entry still passes the current rules.
+
+    A plain-only hit is not final. The deaccented variants this selector adds
+    are exactly the queries that find the synced sheet a diacritic hid, and a
+    title carrying diacritics misses synced lyrics at 27.1% against 14.1%
+    without them. Some of those misses are cached as plain-only `ok` entries
+    rather than as `absent`, so freezing them here would put the timings out
+    of reach for good. Re-asking costs one search.
+    """
+    return (entry.get("artist_fit", 0) >= MIN_FIT
+            and entry.get("title_fit", 0) >= MIN_FIT
+            and bool(entry.get("synced")))
 
 
 def fetch(artist, title, cache, session, album=None, duration=None):
     """-> {"synced": str|None, "plain": str|None, "status": "ok"|"absent"}.
 
-    A cached entry is reused only when it is definitive. Legacy entries (which
-    carry no 'status') that recorded nothing are retried, which is what repairs
-    the 62 false negatives already sitting in the cache.
+    A cached entry is reused only when it is definitive AND was chosen by the
+    current selection rules. Legacy entries (which carry no 'status') that
+    recorded nothing are retried, which is what repairs the 62 false negatives
+    already sitting in the cache.
+
+    Being definitive is not enough on its own. Every entry here was once
+    chosen by a picker that never compared the title, and the early return
+    below meant no amount of re-running would ever revisit one -- the same
+    shape of bug as the cached false negatives this module was written to fix,
+    one level up: there the wrong *answer* was frozen, here the wrong *rule*
+    is. So entries carry the selector that produced them, and an entry from an
+    older selector is re-judged before it is trusted.
+
+    Re-judging is free where the entry recorded which hit it took. Only what
+    fails, or never recorded one, costs a request.
     """
     key = f"{artist}|{title}".lower()
     cached = cache.get(key)
     if isinstance(cached, dict):
-        if cached.get("status") in ("ok", "absent"):
+        current = cached.get("selector") == SELECTOR
+        if current and cached.get("status") in ("ok", "absent"):
             return cached
-        if cached.get("synced") or cached.get("plain"):
+        if not current and cached.get("status") == "ok":
+            # Chosen by older rules. Judge it where we can do so for nothing.
+            rescored = _rescore(dict(cached), artist, title)
+            if rescored and _good(rescored):
+                rescored["selector"] = SELECTOR
+                cache[key] = rescored
+                return rescored
+            # Failed, or unjudgeable: fall through and ask again.
+        elif current is False and cached.get("status") == "absent":
+            # Nothing was found under the old query set. The variants added
+            # alongside this selector are new questions, so ask them.
+            pass
+        elif cached.get("synced") or cached.get("plain"):
             cached.setdefault("status", "ok")       # legacy hit, still good
-            return cached
-        # legacy miss with no status: fall through and retry it
+            rescored = _rescore(dict(cached), artist, title)
+            if rescored and _good(rescored):
+                rescored["selector"] = SELECTOR
+                cache[key] = rescored
+                return rescored
     elif isinstance(cached, str):
         cache[key] = {"plain": cached, "synced": None, "status": "ok"}
         return cache[key]
@@ -238,33 +368,47 @@ def fetch(artist, title, cache, session, album=None, duration=None):
         saw_answer = True
         if status == "absent":
             continue
-        hit = _pick(_hits_from(payload), duration, artist)
+        hit = _pick(_hits_from(payload), duration, artist, title)
         if not (hit and (hit.get("syncedLyrics") or hit.get("plainLyrics"))):
             continue
         right_artist = not artist or not hit.get("artistName") or \
-            fit(artist, hit["artistName"]) >= 0.5
+            fit(artist, hit["artistName"]) >= MIN_FIT
+        right_title = not title or not hit.get("trackName") or \
+            fit(title, hit["trackName"]) >= MIN_FIT
         # Stopping at the first attempt that returns anything is how a Polish
         # "Kawasaki" won: it was found by an earlier query than the Serbian
-        # "Kavasaki" spelling that is actually this song. Keep the wrong-artist
-        # hit only as a fallback and carry on looking for the right one.
-        if right_artist:
+        # "Kavasaki" spelling that is actually this song. Keep an imperfect hit
+        # only as a fallback and carry on looking for a better one.
+        if right_artist and right_title:
             best = hit
             if hit.get("syncedLyrics"):
-                break                     # synced by the right artist: done
+                break                     # the right song, synced: done
         elif best is None:
             best = hit
 
     if best:
+        ma = best.get("artistName") or ""
+        mt = best.get("trackName") or ""
         out = {"synced": best.get("syncedLyrics") or None,
                "plain": best.get("plainLyrics") or None,
                "status": "ok",
-               "matched": f'{best.get("artistName")} - {best.get("trackName")}',
-               "matched_duration": best.get("duration")}
+               "matched": f"{ma} - {mt}",
+               "matched_duration": best.get("duration"),
+               # Stamped rather than recomputed downstream, so write_tags and
+               # the audit grade the entry on the same numbers the picker used.
+               # None, not 0.0, where the hit named nothing: the gates above
+               # accept a hit with no artistName on purpose, and fit(x, "") is
+               # 0.0, which the write side would read as a measured
+               # disagreement and throw the lyrics away.
+               "artist_fit": round(fit(artist, ma), 3) if (artist and ma) else None,
+               "title_fit": round(fit(title, mt), 3) if (title and mt) else None,
+               "selector": SELECTOR}
         cache[key] = out
         return out
 
     if saw_answer:
-        out = {"synced": None, "plain": None, "status": "absent"}
+        out = {"synced": None, "plain": None, "status": "absent",
+               "selector": SELECTOR}
         cache[key] = out
         return out
 

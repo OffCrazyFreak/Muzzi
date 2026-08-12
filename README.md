@@ -50,6 +50,10 @@ That is why:
   in the name because Samsung Music has no BPM field and won't show the tag.
 - Lyrics are written twice: embedded (Namida and most players read this) and as
   a `.lrc` sidecar (Samsung Music reads **only** sidecars).
+- A sheet has to be the right song *and* the right edit. Lyrics whose artist or
+  title disagrees with the track are dropped; lyrics timed against a recording
+  more than 2 seconds from yours keep their words but lose their timings, so
+  you get plain text instead of subtitles that drift.
 
 `AGENTS.md` has the rules that follow from this, for anyone changing the code.
 
@@ -179,9 +183,10 @@ enough that one has an intro the other does not.
 
 **6. Copies are written.** Originals are never touched. Every tag goes inside
 the file, filenames get the BPM because Samsung Music has no BPM field, a
-`.lrc` sidecar goes beside each track because Samsung Music reads only those,
-and the playlists are built from the tags that were just written -- so what a
-playlist says and what the player groups by cannot disagree.
+`.lrc` sidecar goes beside each track whose lyrics survived both gates (right
+song, and timed for this edit) because Samsung Music reads only those, and the
+playlists are built from the tags that were just written -- so what a playlist
+says and what the player groups by cannot disagree.
 
 Then `verify` reads the output back and reports what still needs you.
 
