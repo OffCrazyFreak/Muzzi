@@ -68,7 +68,8 @@ sys.path.insert(0, HERE)
 
 from pipeline.hints_resolve import video_id  # noqa: E402
 from pipeline.identify import RateLimiter  # noqa: E402
-from pipeline.review import _ods  # noqa: E402
+from pipeline.review import (_hints_from_ods, _ods, load_hints,  # noqa: E402
+                             load_links, save_hints)
 from pipeline.textsearch import get_with_retry  # noqa: E402
 from pipeline.useragent import UA  # noqa: E402
 from pipeline.webmatch import fit, src_ytmusic, version_mismatch  # noqa: E402
@@ -121,23 +122,37 @@ def _load(path, default):
 
 
 def link_hints():
-    """-> {filename: link}, from the optional 'link' column of hints.tsv.
+    """-> {filename: link}, from hints.tsv and from the sheet you edited.
 
-    A separate column from 'hint' on purpose. review.load_hints() reads the
-    'hint' column of every file in review/, so a bare "y" answering a link
-    question would otherwise be parsed by parse_hint as confirmation of the
-    artist and title instead.
+    A column of its own, never 'hint'. review.load_hints() reads the 'hint'
+    column of every file in review/, so a bare "y" answering a link question
+    would otherwise be parsed by parse_hint as confirming the artist and title.
+
+    The sheet is read after hints.tsv, so an answer typed today wins over the
+    same file's older one, and answers are written back into hints.tsv: a sheet
+    is a view, and the next run rebuilds it.
     """
+    out = dict(load_links())
+    if os.path.isdir(REVIEW_DIR):
+        for name in sorted(os.listdir(REVIEW_DIR)):
+            path = os.path.join(REVIEW_DIR, name)
+            if name.lower().endswith(".ods"):
+                out.update(_hints_from_ods(path, column="link"))
+            elif name.lower().endswith((".tsv", ".csv", ".txt")):
+                out.update(_from_delimited(path))
+    return out
+
+
+def _from_delimited(path):
+    """-> {filename: link} from a saved-as-text sheet."""
     out = {}
-    if not os.path.exists(HINTS):
-        return out
-    with open(HINTS, encoding="utf-8-sig", newline="") as fh:
+    with open(path, encoding="utf-8-sig", newline="") as fh:
         head = fh.readline()
-        if not head:
+        if not head or "link" not in head:
             return out
-        delim = max(("\t", ",", ";"), key=head.count)
         fh.seek(0)
-        for row in csv.DictReader(fh, delimiter=delim):
+        for row in csv.DictReader(fh, delimiter=max(("\t", ",", ";"),
+                                                    key=head.count)):
             name = (row.get("file") or "").strip()
             link = (row.get("link") or "").strip()
             if name and link:
@@ -278,14 +293,19 @@ def yt_search(artist, title, limiter, cache):
     return best
 
 
-def decide(path, cands, row, secs):
+REFUSALS = {"n", "no", "none", "-"}
+
+
+def decide(path, cands, row, secs, refused=False):
     """-> (record, reason) for what to write, or (None, reason) to review it.
 
     Origin wins outright and is never gated. Otherwise two independent sources
     naming one video is enough; a lone exact source is enough; a lone search
     result has to prove itself on duration and version markers.
     """
-    if not cands:
+    if not cands or refused:
+        # "n" in the sheet is an answer, not a blank: stop proposing this one
+        # and stop asking about it.
         return None, None
     origin = [c for c in cands if c["tier"] == "origin"]
     if origin:
@@ -309,7 +329,7 @@ def decide(path, cands, row, secs):
     if len(ranked) > 1:
         runner = len({c["source"] for c in ranked[1][1]})
         if n_sources <= runner:
-            return None, (f"sources disagree: "
+            return None, ("sources disagree: "
                           + ", ".join(f'{vid} ({len({c["source"] for c in cs})})'
                                       for vid, cs in ranked[:3]))
 
@@ -372,9 +392,11 @@ def main():
     analysis = {v["path"]: v for v in _load(ANALYSIS, {}).values() if v.get("path")}
     lookup = {} if args.force else _load(LOOKUP, {})
 
+    answers = link_hints()
+    refused = {f for f, v in answers.items() if v.strip().lower() in REFUSALS}
     cand = candidates_from_caches(
         rows, _load(TAGSEED, {}), _load(HINT_YT, {}), _load(WEBMATCH, {}),
-        _load(REDOWNLOAD, {}), link_hints())
+        _load(REDOWNLOAD, {}), answers)
     local_files = sum(1 for r in rows if cand.get(r["path"]))
     inherited = propagate(cand, groups_of(_load(DUPES, []),
                                           _load(NAME_DUPES, {})))
@@ -423,7 +445,8 @@ def main():
     for r in rows:
         path = r["path"]
         secs = (analysis.get(path) or {}).get("decoded_secs")
-        rec, reason = decide(path, cand.get(path) or [], r, secs)
+        rec, reason = decide(path, cand.get(path) or [], r, secs,
+                             refused=r["file"] in refused)
         if rec:
             rec.update({"url": WATCH.format(rec["video_id"]),
                         "inherited_from": inherited.get(path),
@@ -450,6 +473,12 @@ def main():
     if not args.apply:
         print(f"\n  {len(out)} links resolved. Re-run with --apply.\n")
         return 0
+
+    # Answers typed into the sheet move into hints.tsv, which is the record
+    # that survives: the sheet is rebuilt from scratch on the next run.
+    if answers != load_links():
+        save_hints(load_hints(), answers)
+        print(f"\n  {len(answers)} link answers kept in {HINTS}")
 
     json.dump(out, open(OUT + ".tmp", "w"), ensure_ascii=False, indent=1)
     os.replace(OUT + ".tmp", OUT)

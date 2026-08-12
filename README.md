@@ -285,6 +285,12 @@ there is nothing left to answer.
 | `1 - needs a link.ods` | nothing found anywhere | a URL |
 | `2 - confirm the name.ods` | a name was proposed but the filename disagrees | `y` or `n` |
 | `3 - check the rest.ods` | everything else, least confident first | anything |
+| `4 - confirm the youtube link.ods` | a video was found but not confidently enough to write it | a URL, or `n` |
+
+Sheet 4 answers go in its own **`link`** column, not `hint`: a bare `y` in the
+hint column means the artist and title are right, which is a different
+question. Those answers are kept in a `link` column in `hints.tsv`, alongside
+the hints, and survive the sheets being rebuilt.
 
 **Your answers are kept in `hints.tsv`, not in the sheets.** Delete a sheet
 whenever you like; the answers in it are already remembered, and an answer

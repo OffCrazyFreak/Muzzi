@@ -31,7 +31,7 @@ import unicodedata
 
 import mutagen
 
-from mutagen.id3 import (APIC, TALB, TBPM, TCON, TDRC, TIT2, TKEY,
+from mutagen.id3 import (APIC, COMM, TALB, TBPM, TCON, TDRC, TIT2, TKEY,
                          TLAN, TPE1, TPE2, TPE4, TPOS, TPUB, TRCK, TSRC, TXXX,
                          UFID, USLT, WOAS)
 

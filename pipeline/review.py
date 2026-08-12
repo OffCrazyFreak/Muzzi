@@ -77,9 +77,14 @@ def _load(path):
     return json.load(open(path)) if os.path.exists(path) else {}
 
 
-def _hints_from_ods(path):
+def _hints_from_ods(path, column="hint"):
     """Read an edited LibreOffice spreadsheet directly, so there is no export
-    step to get wrong."""
+    step to get wrong.
+
+    column names which answer to take. yt_links.py asks about links in a
+    column of its own, because a bare "y" in a hint column means the artist
+    and title are right, which is not what its sheet asked.
+    """
     try:
         from odf.opendocument import load
         from odf.table import Table, TableRow, TableCell
@@ -106,8 +111,8 @@ def _hints_from_ods(path):
                 rows.append(cells)
         if not header or "file" not in header:
             continue
-        fi, hi = header.index("file"), (header.index("hint")
-                                        if "hint" in header else None)
+        fi, hi = header.index("file"), (header.index(column)
+                                        if column in header else None)
         for r in rows:
             if hi is None or len(r) <= max(fi, hi):
                 continue
@@ -235,15 +240,49 @@ def adopt_orphan_hints(hints, present):
     return moved
 
 
-def save_hints(hints):
+def load_links():
+    """-> {filename: link}, the 'link' column of hints.tsv.
+
+    A column of its own, because the answers mean different things: "y" in the
+    hint column confirms an artist and title, and yt_links.py is asking which
+    video a file came from.
+    """
+    out = {}
+    if not os.path.exists(HINTS):
+        return out
+    with open(HINTS, encoding="utf-8-sig", newline="") as fh:
+        head = fh.readline()
+        if not head:
+            return out
+        fh.seek(0)
+        for row in csv.DictReader(fh, delimiter=max(("\t", ",", ";"),
+                                                    key=head.count)):
+            name = (row.get("file") or "").strip()
+            link = (row.get("link") or "").strip()
+            if name and link:
+                out[name] = link
+    return out
+
+
+def save_hints(hints, links=None):
     """The durable record of everything you have answered.
 
     Until now an answer existed only inside whichever spreadsheet you typed it
     into, so regenerating the sheets would have thrown away every y, n and link
     -- 1551 of them. The sheets are a view; this file is the memory.
+
+    The link column is read back and re-emitted even when this stage knows
+    nothing about it: review.py rewrites the whole file, so a column it does
+    not carry is a column it deletes.
     """
+    links = load_links() if links is None else links
     with open(HINTS, "w", encoding="utf-8", newline="") as fh:
         w = csv.writer(fh, delimiter="\t")
+        if links:
+            w.writerow(["file", "hint", "link"])
+            for name in sorted(set(hints) | set(links)):
+                w.writerow([name, hints.get(name, ""), links.get(name, "")])
+            return
         w.writerow(["file", "hint"])
         for name in sorted(hints):
             w.writerow([name, hints[name]])
