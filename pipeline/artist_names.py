@@ -50,6 +50,29 @@ _CYR += list(zip("абвгдежзијклмнопрстуфхцчшѕќѐ", [
     "a", "b", "v", "g", "d", "e", "ž", "z", "i", "j", "k", "l", "m", "n", "o",
     "p", "r", "s", "t", "u", "f", "h", "c", "č", "š", "dz", "ḱ", "e"]))
 
+# How a credit splits into individual artists. It lives here rather than in
+# write_tags because both modules need the same answer: write_tags splits the
+# field before canonicalising each part, and the rules built here have to be
+# keyed the same way or they can never match what write_tags looks up.
+ARTIST_SPLIT = re.compile(
+    r"\s*;\s*|\s+&\s+|\s+[Xx]\s+|\s*,\s*(?=\S)"
+    r"|\s+(?:[Ff]eat\.?|[Ff][Tt]\.?|[Ff]eaturing)\s+"
+    r"|\s+i\s+")
+
+
+def lead_of(credit):
+    """-> the lead artist in a credit string.
+
+    MusicBrainz gives one artist_id per recording and a credit that may name
+    several people, so "mgk; Camila Cabello" carries mgk's MBID. Keying a rule
+    on the whole credit produced rules like 'mgk; camila cabello' -> 'mgk',
+    which are not spelling equivalences and never match, because every caller
+    splits the credit first and looks up one artist at a time.
+    """
+    parts = [p.strip() for p in ARTIST_SPLIT.split(credit or "") if p.strip()]
+    return parts[0] if parts else (credit or "")
+
+
 # Words a YouTube channel adds to an artist's own name. "Lucidious Music" is
 # the channel Lucidious uploads to, not a second artist.
 _CHANNEL_WORDS = re.compile(
@@ -127,9 +150,12 @@ def from_musicbrainz():
         mbid, artist = f.get("artist_id"), f.get("artist")
         if not (mbid and artist):
             continue
-        by_mbid[mbid][artist] += 1
+        # The MBID identifies the lead artist, so only the lead spelling is
+        # evidence about that artist. The rest of the credit belongs to other
+        # people and to their own MBIDs.
+        by_mbid[mbid][lead_of(artist)] += 1
         if f.get("artist_canonical"):
-            canon[mbid] = f["artist_canonical"]
+            canon[mbid] = lead_of(f["artist_canonical"])
     out, groups = {}, {}
     for mbid, spellings in by_mbid.items():
         if len(spellings) < 2 and mbid not in canon:
@@ -255,12 +281,44 @@ def _shares_rare_word(a, b, seen):
     return any(common_words[w] <= 3 for w in shared)
 
 
+def _resolve(mapping):
+    """Follow each rule to where it actually ends.
+
+    canonical() is a single lookup, so a rule whose target is itself a key
+    leaves the name half-fixed. Pinning "mgk" -> "Machine Gun Kelly" against a
+    MusicBrainz rule "machine gun kelly" -> "mgk" is exactly that: the two
+    disagree about direction, and a single lookup turns "Machine Gun Kelly"
+    into "mgk", the opposite of what was pinned.
+
+    Following the chain settles it: the pinned end wins, because it is the only
+    one a human asserted. A cycle with no pinned end keeps its first value
+    rather than looping.
+
+    Nothing is dropped on the way. A rule whose value equals its key still does
+    work, because the key is folded and the name looked up is not: "30zona" ->
+    "30zona" is what turns "30ZONA" into "30zona", and deleting it as a no-op
+    put the shouting back.
+    """
+    out = {}
+    for key, value in mapping.items():
+        seen = {key}
+        while fold(value) in mapping and fold(value) not in seen:
+            seen.add(fold(value))
+            value = mapping[fold(value)]
+        out[key] = value
+    return out
+
+
 def build(rows=None):
     """-> (mapping, provenance). Pinned entries override MusicBrainz, which
     overrides a purely-cosmetic casing choice."""
     mb, groups = from_musicbrainz()
     pinned = load_pinned()
     mapping = dict(mb)
+    # A pin also settles the direction of any rule pointing at it, so drop the
+    # MusicBrainz rule that disagrees before it can win the chain.
+    for k, v in pinned.items():
+        mapping.pop(fold(v), None)
     mapping.update(pinned)
     why = {k: ("pinned" if k in pinned else "musicbrainz") for k in mapping}
     if rows is not None:
@@ -268,11 +326,33 @@ def build(rows=None):
             mapping[k], why[k] = v, "casing"
         for k, v in from_typos(rows, mapping).items():
             mapping[k], why[k] = v, "typo"
+    mapping = _resolve(mapping)
+    why = {k: why.get(k, "derived") for k in mapping}
     return mapping, why, groups
 
 
 def canonical(artist, mapping):
     return mapping.get(fold(artist), artist)
+
+
+def canonical_credit(credit, mapping):
+    """-> the whole credit with every artist in it canonicalised separately.
+
+    write_tags splits the credit and canonicalises each part, so a report that
+    looks the whole credit up in one go describes something no stage does: it
+    misses "mgk; Trippie Redd", whose lead is pinned, and it used to make the
+    rules look like they collapsed a credit down to its lead artist.
+    """
+    parts = [p for p in ARTIST_SPLIT.split(credit or "") if p and p.strip()]
+    if len(parts) < 2:
+        return canonical(credit, mapping)
+    out, rest = [], credit
+    for p in parts:
+        # Keep the separators the credit actually used.
+        i = rest.index(p)
+        out.append(rest[:i] + canonical(p.strip(), mapping))
+        rest = rest[i + len(p):]
+    return "".join(out) + rest
 
 
 def main():
@@ -289,7 +369,7 @@ def main():
         a = r.get("proposed_artist")
         if not a:
             continue
-        c = canonical(a, mapping)
+        c = canonical_credit(a, mapping)
         if c != a:
             hits[(a, c)] += 1
             changed.append((r["file"], a, c))
@@ -300,7 +380,13 @@ def main():
     if not hits:
         print("  nothing in the library uses a non-canonical spelling\n")
     for (a, c), n in hits.most_common():
-        print(f"    {a[:34]:34} -> {c[:28]:28} {n:3} track(s)  [{why[fold(a)]}]")
+        # A credit changes because one of the artists in it did, so the
+        # provenance is that artist's, not the whole credit's -- looking the
+        # credit up whole raised a KeyError on "RASTA x CORONA".
+        parts = [p.strip() for p in ARTIST_SPLIT.split(a) if p and p.strip()]
+        src = sorted({why[fold(p)] for p in parts if fold(p) in why})
+        print(f"    {a[:34]:34} -> {c[:28]:28} {n:3} track(s)  "
+              f"[{'+'.join(src) or 'derived'}]")
 
     if args.apply:
         json.dump({"mapping": mapping, "why": why, "groups": groups},

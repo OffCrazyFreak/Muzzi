@@ -418,16 +418,15 @@ def safe_name(s, fallback="Unknown"):
 
 # Featured artists arrive either joined into the artist field ("Ed Sheeran;
 # Bring Me the Horizon", 37 of 41 cases here) or already inside the title.
-_ARTIST_SPLIT = re.compile(
-    r"\s*;\s*|\s+&\s+|\s+[Xx]\s+|\s*,\s*(?=\S)"
-    # "Buba Corelli Ft. Jala Brat & Coby" carries the feature marker inside
-    # the artist field rather than the title, and splitting only on "&" left a
-    # lead artist called "Buba Corelli Ft. Jala Brat".
-    r"|\s+(?:[Ff]eat\.?|[Ff][Tt]\.?|[Ff]eaturing)\s+"
-    # Croatian/Serbian "i" is "and": "Ivana Selakov i Aca Lukas" is two
-    # artists. Lower case only -- an upper-case "I" is far likelier to be part
-    # of a name than a conjunction.
-    r"|\s+i\s+")
+#
+# The pattern itself lives in artist_names, because the alias rules have to be
+# keyed on the same split this uses. It covers ";", "&", "x" and ",", the
+# feature markers ("Buba Corelli Ft. Jala Brat & Coby" carries the marker in
+# the artist field, and splitting only on "&" left a lead artist called "Buba
+# Corelli Ft. Jala Brat"), and lower-case Croatian/Serbian "i" for "and"
+# ("Ivana Selakov i Aca Lukas" is two artists; an upper-case "I" is far likelier
+# to be part of a name).
+_ARTIST_SPLIT = artist_names.ARTIST_SPLIT
 _FEAT_IN_TITLE = re.compile(
     r"\s*[\(\[]?\s*(?:feat\.?|ft\.?|featuring)\s+([^)\]]+?)\s*[\)\]]?\s*$", re.I)
 
