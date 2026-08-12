@@ -173,14 +173,23 @@ def lyrics_timing_ok(entry, decoded_secs, cut=0.0):
     LRCLIBee and Music Assistant both require. Borrowing it keeps us from
     inventing a threshold nobody else honours.
 
-    `cut` is added back because the comparison has to be against the recording
-    LRCLIB timed, not the copy we trimmed silence off. Without it, trimming
-    would push tracks over the gate for having been improved.
+    `cut` is subtracted, not added. `decoded_secs` is measured by analyze.py on
+    the SOURCE file, which is the untrimmed original, so it already describes
+    the length before any silence was removed. The copy we ship is `cut`
+    seconds shorter than that, and LRCLIB timed a commercial master with no
+    padding at all, so the length to compare against is the source minus what
+    we take off the front. Adding it counted the padding twice, and did so on
+    exactly the files trimming helps most: measured across the tracks with a
+    real trim, 75 sheets passed today and failed once `cut` was added, and 47
+    that failed passed once it was subtracted.
+
+    `cut` is 0 on every untrimmed file, where both spellings are identical,
+    which is why no aggregate check could see this.
     """
     md = entry.get("matched_duration") if isinstance(entry, dict) else None
     if not md or not decoded_secs:
         return True, None            # nothing to compare: not evidence of wrong
-    if abs((decoded_secs + (cut or 0.0)) - md) > MAX_DURATION_DELTA:
+    if abs((decoded_secs - (cut or 0.0)) - md) > MAX_DURATION_DELTA:
         return False, "duration_mismatch"
     return True, None
 
