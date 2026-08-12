@@ -23,7 +23,9 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 import unicodedata
 
 import mutagen
@@ -41,6 +43,9 @@ from pipeline.genres import canonical as canonical_genre  # noqa: E402
 from pipeline import scenes  # noqa: E402
 from pipeline import bpm_overrides  # noqa: E402
 from pipeline import artist_names  # noqa: E402
+from pipeline import lrc  # noqa: E402
+from pipeline import lyric_align  # noqa: E402
+from pipeline import silence  # noqa: E402
 
 VERSION = "muzzi/1"
 REVIEW = os.path.join(HERE, "cache", "review.json")
@@ -53,6 +58,15 @@ NAME_DUPES = os.path.join(HERE, "cache", "name_duplicates.json")
 CASCADE = os.path.join(HERE, "cache", "cascade.json")
 CANON = os.path.join(HERE, "cache", "artist_canon.json")
 ART_INDEX = os.path.join(HERE, "cache", "art_index.json")
+SILENCE = os.path.join(HERE, "cache", "silence.json")
+ALIGN = os.path.join(HERE, "cache", "lyric_align.json")
+
+# Re-timing a lyric sheet by less than this is not worth the write: it is
+# inside the error of the measurement that produced it.
+MIN_LRC_SHIFT = 0.15
+# Two recorded trims closer than this are the same trim. Prevents a re-copy
+# on every run from float noise in the cached figure.
+TRIM_EPSILON = 0.005
 
 # ReplayGain 2.0 reference loudness. gain = target - measured.
 RG_TARGET_LUFS = -18.0
@@ -140,22 +154,87 @@ def resolve_language(verified, lyrics):
     return None, None
 
 
-def _source_of(path):
-    """-> the source filename this output was written from, if recorded."""
+def _muzzi_tag(path, name):
+    """-> one MUZZI_* value already written into an output file, or None.
+
+    ID3 and MP4 keep these in different places, and every caller wants the
+    string rather than the frame.
+    """
     try:
         m = mutagen.File(path)
         t = m.tags if m else None
         if t is None:
             return None
         if hasattr(t, "getall"):
-            fr = t.getall("TXXX:MUZZI_SOURCE_FILE")
+            fr = t.getall(f"TXXX:{name}")
             return str(fr[0].text[0]) if fr and fr[0].text else None
-        v = t.get("----:com.apple.iTunes:MUZZI_SOURCE_FILE")
+        v = t.get(f"----:com.apple.iTunes:{name}")
         if v:
             return v[0].decode("utf-8", "ignore") if isinstance(v[0], bytes) else str(v[0])
     except Exception:
         pass
     return None
+
+
+def _source_of(path):
+    """-> the source filename this output was written from, if recorded."""
+    return _muzzi_tag(path, "MUZZI_SOURCE_FILE")
+
+
+def _trim_of(path):
+    """-> how many seconds were cut off the front of an existing output file.
+
+    Absent means it was written before trimming existed, which is not the same
+    as zero: a file with no marker has to be re-made from the source before it
+    can be trusted to be untrimmed-on-purpose.
+    """
+    raw = _muzzi_tag(path, "MUZZI_TRIM")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def copy_audio(src, dst, cut):
+    """Put a copy of `src` at `dst`, minus `cut` seconds off the front.
+
+    -c copy drops whole compressed frames instead of decoding, so this is
+    lossless: the retained audio was verified sample-identical to the source
+    (correlation 1.000000) on both MP3 and AAC, with bitrate, codec and cover
+    art unchanged. Frame granularity means the real cut lands within ~26ms
+    (MP3) or ~23ms (AAC) of the one asked for, which is invisible against the
+    0.2s minimum this is ever used for.
+
+    -> the seconds actually cut. A failure here falls back to a whole copy and
+    returns 0.0: a song that is not trimmed is a cosmetic problem, and a song
+    that is missing is not.
+    """
+    if cut <= 0:
+        shutil.copy2(src, dst)
+        return 0.0
+    # Never stage inside the output tree: write_tags --prune deletes anything
+    # under out/_all that this run did not intend to be there.
+    tmp = os.path.join(tempfile.gettempdir(),
+                       f"muzzi-trim-{os.getpid()}{os.path.splitext(src)[1]}")
+    try:
+        p = subprocess.run(
+            ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+             "-ss", f"{cut:.3f}", "-i", src, "-map", "0", "-c", "copy",
+             "-map_metadata", "0", "-y", tmp],
+            capture_output=True, text=True, timeout=180)
+        if p.returncode == 0 and os.path.getsize(tmp) > 0:
+            shutil.move(tmp, dst)
+            shutil.copystat(src, dst)
+            return cut
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    shutil.copy2(src, dst)
+    return 0.0
 
 
 def _song_key(basename):
@@ -320,12 +399,34 @@ def write_generic(dst, fields, art_path, lyrics):
     return "written"
 
 
-def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False):
+def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
+              cut=0.0, lrc_shift=0.0):
+    """-> the seconds actually cut off the front of the output copy."""
     if dry:
-        return "would write"
+        return 0.0
     os.makedirs(os.path.dirname(dst), exist_ok=True)
+    # The copy is normally made once and then re-tagged in place on later
+    # runs. It also has to be re-made when the trim it carries is not the trim
+    # it should carry -- which is what brings a library built before this
+    # existed up to date, and what applies a changed threshold later. The
+    # figure is always measured on the untrimmed source, so this converges
+    # instead of eating the song a slice at a time.
+    trimmed = 0.0
+    if os.path.exists(dst):
+        have = _trim_of(dst)
+        if have is not None and abs(have - cut) <= TRIM_EPSILON:
+            # Already the copy we want. Keep its real figure: re-stamping it
+            # as 0.000 here would make the next run believe it was untrimmed
+            # and re-make it, every run, forever.
+            trimmed = have
+        elif os.path.exists(src):
+            os.remove(dst)
+        else:
+            # Wrong or unknown trim, but nothing to re-make it from. Report
+            # what the file actually carries rather than what was wanted.
+            trimmed = have or 0.0
     if not os.path.exists(dst):
-        shutil.copy2(src, dst)
+        trimmed = copy_audio(src, dst, cut)
 
     if not dst.lower().endswith(".mp3"):
         primary, _ = canonical_genre(extra.get("genres"))
@@ -337,7 +438,7 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False):
             primary = chosen or primary
         gain = (RG_TARGET_LUFS - float(audio["loudness_lufs"])
                 if audio.get("loudness_lufs") is not None else None)
-        return write_generic(dst, {
+        write_generic(dst, {
             "title": (ident or {}).get("display_title"),
             "artist": "; ".join(ident["all_artists"]) if ident else None,
             "albumartist": (ident or {}).get("lead_artist"),
@@ -369,7 +470,12 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False):
             "muzzi_source_file": os.path.basename(src),
             "muzzi_lyric_verdict": (verified or {}).get("verdict"),
             "muzzi_lyric_score": (verified or {}).get("score"),
+            # Always written, including as "0.000", so that a file with no
+            # marker at all can be told from one deliberately left whole.
+            "muzzi_trim": f"{trimmed:.3f}",
+            "muzzi_lrc_shift": (f"{lrc_shift:.2f}" if lrc_shift else None),
         }, extra.get("art_path"), lyrics)
+        return trimmed
 
     mp3 = MP3(dst)
     if mp3.tags is None:
@@ -542,6 +648,12 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False):
     # a song that has genuinely disappeared, without loosening the check that
     # stops the last copy of anything being deleted.
     txxx("MUZZI_SOURCE_FILE", os.path.basename(src))
+    # Always written, including as "0.000": a file with no marker at all is one
+    # written before trimming existed, and write_one has to be able to tell
+    # that apart from a file deliberately left whole.
+    txxx("MUZZI_TRIM", f"{trimmed:.3f}")
+    if lrc_shift:
+        txxx("MUZZI_LRC_SHIFT", f"{lrc_shift:.2f}")
     if verified and verified.get("verdict"):
         txxx("MUZZI_LYRIC_VERDICT", verified["verdict"])
         txxx("MUZZI_LYRIC_SCORE", verified.get("score"))
@@ -551,7 +663,7 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False):
     # rendering" -- which matters for c/s/z with diacritics. v2.4 also carries
     # UTF-8 natively instead of needing UTF-16.
     mp3.save(v2_version=4)
-    return "written"
+    return trimmed
 
 
 def main():
@@ -710,6 +822,8 @@ def main():
     canon = json.load(open(CANON)).get("mapping", {}) \
         if os.path.exists(CANON) else {}
     art_index = json.load(open(ART_INDEX)) if os.path.exists(ART_INDEX) else {}
+    sil = json.load(open(SILENCE)) if os.path.exists(SILENCE) else {}
+    align = json.load(open(ALIGN)) if os.path.exists(ALIGN) else {}
 
     # Album loudness = duration-weighted mean of its tracks' loudness. Proper
     # ReplayGain measures the concatenated album; this is within a few tenths
@@ -872,14 +986,48 @@ def main():
             name = safe_name(stem) + ext
             stats["audio_only"] += 1
 
+        # How much dead air comes off the front of this file, and what that
+        # does to its lyric sheet.
+        #
+        #   lrc_shift = offset - cut
+        #
+        # where `offset` is how far the audio lags the sheet, measured on the
+        # untrimmed source. An LRCLIB sheet is timed against the commercial
+        # master; a YouTube rip carries extra padding at the head. So when the
+        # padding is the whole story, offset == cut and the sheet needs no
+        # shift at all -- cutting the silence is what puts the file back on the
+        # sheet's timeline. Shifting by -cut "to compensate" would double the
+        # error on exactly the tracks this is meant to fix.
+        #
+        # With no measurement the shift is zero rather than a guess: the file
+        # is still trimmed, and lyric_align.py records why it could not be
+        # checked so the review sheet can say so.
+        cut = silence.cut_for(sil.get(src))
+
         lyrics, synced = None, None
+        entry = None
         if ident:
             entry = lyric_cache.get(f'{ident["artist"]}|{ident["title"]}'.lower())
             if isinstance(entry, dict):
                 synced, lyrics = entry.get("synced"), entry.get("plain")
             elif isinstance(entry, str):
                 lyrics = entry
-            # Prefer the timestamped body for embedding.
+
+        # An offset only means anything next to the sheet it was measured
+        # against, so the sheet goes in with the lookup. If lyrics_fetch has
+        # since swapped in a different one, the measurement is refused rather
+        # than applied to a body it never saw.
+        offset = lyric_align.offset_for(align.get(src), synced)
+        lrc_shift = (offset - cut) if offset is not None else 0.0
+        if abs(lrc_shift) < MIN_LRC_SHIFT:
+            lrc_shift = 0.0
+
+        if ident:
+            if synced and lrc_shift:
+                synced = lrc.shift(synced, lrc_shift)
+                stats["lrc_shifted"] = stats.get("lrc_shifted", 0) + 1
+            # Prefer the timestamped body for embedding. Re-read after the
+            # shift so the embedded frame and the sidecar carry the same text.
             lyrics = synced or lyrics
             if not lyrics_trustworthy(entry, v, ident.get("artist")):
                 lyrics, synced = None, None
@@ -899,7 +1047,14 @@ def main():
             intended.add(os.path.realpath(dst))
             intended.add(os.path.realpath(os.path.splitext(dst)[0] + ".lrc"))
             written_from.add(os.path.basename(src))
-            write_one(src, dst, ident, a, v, lyrics, extra, dry=args.dry_run)
+            trimmed = write_one(src, dst, ident, a, v, lyrics, extra,
+                                dry=args.dry_run, cut=cut, lrc_shift=lrc_shift)
+            if trimmed:
+                stats["trimmed"] = stats.get("trimmed", 0) + 1
+            elif cut and not args.dry_run:
+                # The cut was wanted and did not happen: ffmpeg failed, or the
+                # source is gone and the existing copy could not be re-made.
+                stats["trim_failed"] = stats.get("trim_failed", 0) + 1
             # Sidecar .lrc as well: it is the most universally supported route
             # for synced lyrics on Android, and costs a couple of KB.
             if synced and not args.dry_run and not args.no_lrc:
@@ -922,6 +1077,10 @@ def main():
     print(f"    with cover art                    {stats['with_art']:4}")
     print(f"    with genre                        {stats['with_genre']:4}")
     print(f"    synced .lrc sidecars              {stats.get('lrc_files', 0):4}")
+    print(f"    leading silence trimmed           {stats.get('trimmed', 0):4}")
+    if stats.get("trim_failed"):
+        print(f"      wanted but not cut              {stats['trim_failed']:4}")
+    print(f"    lyric sheets re-timed             {stats.get('lrc_shifted', 0):4}")
     print(f"    errors                            {stats['errors']:4}\n")
 
     # Report unconditionally, delete only when asked. A stale file is not

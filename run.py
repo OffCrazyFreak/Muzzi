@@ -104,7 +104,11 @@ def main():
             # analysis.json means every newly-added file has no quality figure
             # and loses by default -- which silently kept the worse copy of 69
             # songs the first time re-downloads went through.
-            [stage("analyze", *args.root, *jflag), stage("dedupe")],
+            # silence measures the SOURCE files, so it needs nothing but the
+            # track list -- and measuring the source is what makes trimming
+            # idempotent, since the thing measured never changes.
+            [stage("analyze", *args.root, *jflag), stage("silence", *jflag),
+             stage("dedupe")],
         ]),
 
         # First decision point: who is still unidentified.
@@ -127,7 +131,11 @@ def main():
         ("parallel", [
             [stage("cascade"), stage("fetch_art"), stage("enrich_release"),
              stage("enrich", *jflag)],
-            [stage("lyrics_fetch"), stage("verify_lyrics")],
+            # lyric_align needs the sheets lyrics_fetch downloads, and shares
+            # verify_lyrics' Whisper models, so it follows both rather than
+            # competing with them for cores.
+            [stage("lyrics_fetch"), stage("verify_lyrics"),
+             stage("lyric_align")],
         ]),
 
         # Lyric verification can promote a match, and cascade can fill an

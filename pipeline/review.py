@@ -54,12 +54,24 @@ SHEETS = [
      "One catalogue agreed and another did not. Type y or n in `hint`."),
     ("3 - check the rest", "verify",
      "Everything else, least confident first. Only the top rows need you."),
+    ("4 - trim and lyric timing", "trim",
+     "Timing, not identity. Nothing here is wrong yet: these are the files "
+     "where the automatic decision was declined or could not be checked. "
+     "In `hint` type trim=n to keep a file at full length, or trim=y to cut "
+     "the silence anyway. Leave it blank to change nothing."),
 ]
 OUT = os.path.join(HERE, "cache", "review.json")
 DUPES = os.path.join(HERE, "cache", "duplicates.json")
 YT_HINTS = os.path.join(HERE, "cache", "hint_youtube.json")
 FN_GUESS = os.path.join(HERE, "cache", "filename_guess.json")
 WEBMATCH = os.path.join(HERE, "cache", "webmatch.json")
+SILENCE = os.path.join(HERE, "cache", "silence.json")
+ALIGN = os.path.join(HERE, "cache", "lyric_align.json")
+
+
+def _load(path):
+    """-> a cache written by a stage that may not have run yet."""
+    return json.load(open(path)) if os.path.exists(path) else {}
 
 
 def _hints_from_ods(path):
@@ -260,7 +272,67 @@ def sheet_groups(rows):
     key = lambda r: r["confidence"]          # noqa: E731  worst first
     return {"unknown": sorted(needs_link, key=key),
             "confirm": sorted(confirm, key=key),
-            "verify": sorted(rest, key=key)}
+            "verify": sorted(rest, key=key),
+            "trim": timing_rows(rows)}
+
+
+# A trim this small is not worth anyone's attention even when its lyric
+# alignment could not be checked.
+_TRIM_WORTH_CHECKING = 0.5
+
+
+def timing_rows(rows):
+    """-> the rows whose audio timing or lyric timing needs a human.
+
+    Deliberately built from ALL rows, not from what sheet_groups filtered.
+    Identity and timing are unrelated problems: a track can be identified with
+    total confidence and still open with eight seconds of dead air, or carry a
+    lyric sheet written for a different recording.
+
+    Three kinds of row, worst first:
+
+      * head silence too long to cut blind -- almost always a quiet intro
+        rather than dead air, and cutting it would decapitate the song
+      * the lyric sheet's duration disagrees with the file by more than ten
+        seconds, so it belongs to another recording and no offset can fix it
+      * trimmed, but the lyric alignment could not be measured
+
+    A cut that was wanted and did not happen is not here: write_tags counts it
+    in stats["trim_failed"] and writes no cache, so this sheet cannot see it.
+    """
+    sil = _load(SILENCE)
+    align = _load(ALIGN)
+    out = []
+    for r in rows:
+        p = r.get("path")
+        s, a = sil.get(p) or {}, align.get(p) or {}
+        why = []
+        if s.get("hinted") is not None:
+            continue                     # you already answered this one
+        if s.get("decision") == "review_long":
+            why.append(f"opens with {s['lead']:.1f}s of near-silence, too much "
+                       f"to cut without looking")
+        if a.get("status") == "wrong_recording":
+            why.append(f"lyric sheet is {abs(a['duration_delta']):.0f}s off this "
+                       f"recording's length -- wrong version")
+        elif (s.get("decision") == "trim"
+              and s.get("cut", 0) >= _TRIM_WORTH_CHECKING
+              and a and a.get("status") != "measured"):
+            why.append(f"cutting {s['cut']:.1f}s, lyric timing unverified "
+                       f"({a.get('status')})")
+        if not why:
+            continue
+        row = dict(r)
+        row["reasons"] = why
+        out.append(row)
+    # Longest silence first, then biggest version mismatch: the rows where
+    # doing nothing costs the most.
+    def worst(r):
+        p = r.get("path")
+        s, a = sil.get(p) or {}, align.get(p) or {}
+        return -(max(s.get("lead") or 0,
+                     abs((a.get("duration_delta") or 0)) / 10.0))
+    return sorted(out, key=worst)
 
 
 def _rows_from(queue_path, rows):
@@ -402,6 +474,8 @@ _DROP = {"drop", "dupe", "duplicate", "skip", "remove", "obrisi", "obriši"}
 # Any http link counts as a URL hint: yt-dlp handles Audiomack, SoundCloud and
 # Bandcamp as readily as YouTube, and a search-results page is answerable too.
 _URL = re.compile(r"https?://\S+", re.I)
+# "trim=n", "trim: no", "trim y". Answers sheet 4 and nothing else.
+_TRIM_HINT = re.compile(r"^trim\s*[=:]?\s*(\S+)\s*$", re.I)
 _VIDEO_ID = re.compile(r"(?:v=|youtu\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})")
 
 
@@ -444,6 +518,16 @@ def parse_hint(hint):
         return "drop", None
     if _URL.search(h):
         return "url", h
+
+    # Timing, not identity. Sheet 4 asks about dead air at the head of a file
+    # and about sheets written for another edit, and a question you cannot
+    # answer is a question worth not asking: "trim=n" pins a file at its full
+    # length, "trim=y" releases one whose silence was too long to cut blind.
+    # Checked before the key=value branch below, which would otherwise read it
+    # as an identity field and drop it.
+    m = _TRIM_HINT.match(h)
+    if m and m.group(1).lower() in _YES | _NO:
+        return "trim", m.group(1).lower() in _YES
 
     # "artist: X; title: Y" is as natural to type as "artist=X", and a hint
     # that is ignored because of the separator is worse than no hint at all.
