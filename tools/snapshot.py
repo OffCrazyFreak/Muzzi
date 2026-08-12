@@ -350,7 +350,19 @@ def main():
         # Worktrees live under .claude/worktrees/ inside the main checkout, so
         # "inside the shared checkout" is true of your own tree as well. What
         # matters is being inside the shared checkout and outside your own.
-        if inside(args.out_dir, shared) and not inside(args.out_dir, HERE):
+        #
+        # The shared out/ is named separately because it does not have to sit
+        # inside the checkout: pointing it at another filesystem is on the
+        # table for space, and `inside()` resolves symlinks, so the moment
+        # main/out becomes a link the location test stops matching and the
+        # guard silently stops guarding.
+        # Both halves of the test need it, or the main checkout reading its
+        # own output would start failing the moment the link exists.
+        shared_out = os.path.join(shared, "out") if shared else None
+        mine = inside(args.out_dir, HERE) or \
+            inside(args.out_dir, os.path.join(HERE, "out"))
+        if (inside(args.out_dir, shared) or inside(args.out_dir, shared_out)) \
+                and not mine:
             if not args.allow_shared_read:
                 sys.exit(
                     f"{args.out_dir} is the shared library in {shared}, which "
