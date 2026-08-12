@@ -40,8 +40,9 @@ loudness, dynamics, quality grade.
 
 ### Not built yet
 
-Tag writing, cover art fetch, language tagging, crate/M3U export, provenance
-stamping, hint resolution, YouTube backfill.
+YouTube backfill. Everything else once listed here is built: tag writing,
+cover art fetch, language tagging, crate/M3U export, provenance stamping and
+hint resolution all ship today.
 
 ---
 
@@ -49,8 +50,9 @@ stamping, hint resolution, YouTube backfill.
 
 **A. Write the tags** (the actual deliverable)
 Everything computed so far lives in `cache/`. Write it into ID3 on copies in
-`out/_all/`: artist, title, album, year, genre, BPM, TKEY, Camelot, ReplayGain,
-quality grade, language. Originals never touched.
+`out/_all/`: artist, title, album, year, genre, BPM, TKEY, Camelot, ReplayGain
+(track and album gain, true peak, and the reference loudness they were computed
+against), quality grade, language. Originals never touched.
 
 **B. Cover art**
 We hold `release_group_id` for 231 tracks. Fetch from the Cover Art Archive by
@@ -58,9 +60,10 @@ release-group MBID, fall back to iTunes/Deezer (both free, keyless), embed as
 APIC. Parallel, ~8 concurrent.
 
 **C. Provenance stamping (idempotency)**
-Write `TXXX:TEMPO_VERSION` + a field digest into each file. Re-ingesting a
+Write `TXXX:MUZZI_VERSION` + a field digest into each file. Re-ingesting a
 processed library then costs a tag read (milliseconds/file) instead of a
 re-run, and a file that slipped in unprocessed is detected immediately.
+(Built as `MUZZI_*`, not the `TEMPO_*` this originally proposed.)
 
 **D. Crate export**
 `out/crates/` folders (BPM bands, language, mood, remixes) plus M3U playlists.

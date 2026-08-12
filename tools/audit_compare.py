@@ -61,9 +61,16 @@ def tags_of(path):
 
 
 def num(v):
+    """-> float from a tag value, whatever unit it carries.
+
+    Splitting on whitespace rather than stripping one known suffix: written
+    values are "-6.30 dB", "0.512861" and "-14.00 LUFS", and a stripper that
+    only knew about " dB" silently returned None for every reference-loudness
+    tag, which read as "no file names its target" rather than as a parse bug.
+    """
     try:
-        return float(str(v).replace(" dB", "").strip())
-    except (TypeError, ValueError):
+        return float(str(v).split()[0])
+    except (TypeError, ValueError, IndexError):
         return None
 
 
@@ -169,7 +176,9 @@ def main():
               f"their measurements are kept\n")
 
     # ---------- loudness ----------
-    e_true, e_mono, rg_internal, rg_true, clip = [], [], [], [], 0
+    e_true, e_mono, rg_internal, rg_true = [], [], [], []
+    e_peak, clip, capped = [], 0, 0
+    has_peak = has_ref = wrong_ref = 0
     for r in rows:
         tag = num(r["tags"].get("LOUDNESS_LUFS"))
         tl, ml = r["truth"].get("true_lufs"), r["truth"].get("mono_lufs")
@@ -180,23 +189,60 @@ def main():
         if ml is not None:
             e_mono.append(tag - ml)
         gain = num(r["tags"].get("REPLAYGAIN_TRACK_GAIN"))
-        if gain is not None:
-            rg_internal.append(gain - (RG_TARGET_LUFS - tag))
-            if tl is not None:
-                rg_true.append(gain - (RG_TARGET_LUFS - tl))
-            pk = r["truth"].get("true_peak_db")
-            if pk is not None and pk + gain > 0:
-                clip += 1
+        if gain is None:
+            continue
+        rg_internal.append(gain - (RG_TARGET_LUFS - tag))
+        if tl is not None:
+            # The gain the uncapped formula would have produced. Where the
+            # clipping cap engaged the written gain is deliberately lower, so
+            # this column reads as an error only if the cap is ignored.
+            raw = RG_TARGET_LUFS - tl
+            rg_true.append(gain - raw)
+            # Attributed to the cap only when the file carries the peak the cap
+            # would have used. Without that, a gain below the uncapped value is
+            # just as likely to be a tag written against an older target.
+            tpk_db = r["truth"].get("true_peak_db")
+            if gain < raw - 0.005 and num(
+                    r["tags"].get("REPLAYGAIN_TRACK_PEAK")) and tpk_db is not None:
+                capped += 1
+        # Peak coverage, and whether the peak we WROTE matches the file. A
+        # peak tag that disagrees with the audio is worse than none: it is
+        # what a player trusts to decide the gain is safe.
+        wpk = num(r["tags"].get("REPLAYGAIN_TRACK_PEAK"))
+        tpk = r["truth"].get("true_peak_db")
+        if wpk is not None and wpk > 0:
+            has_peak += 1
+            if tpk is not None:
+                e_peak.append(20 * math.log10(wpk) - tpk)
+        # Clipping is judged against the measured peak whatever we wrote, so a
+        # missing or wrong peak tag cannot hide it.
+        if tpk is not None and tpk + gain > 0:
+            clip += 1
+        ref = num(r["tags"].get("REPLAYGAIN_REFERENCE_LOUDNESS"))
+        if ref is None:
+            has_ref += 0
+        else:
+            has_ref += 1
+            if abs(ref - RG_TARGET_LUFS) > 0.01:
+                wrong_ref += 1
     print("LOUDNESS")
     print("  tag vs real file (EBU R128):", describe(e_true))
     print("  tag vs mono downmix        :", describe(e_mono))
     print("  ReplayGain vs its own tag  :", describe(rg_internal, "dB"))
-    print("  ReplayGain vs real file    :", describe(rg_true, "dB"))
-    print("  files that clip after gain :", pct(clip, n),
-          "(no REPLAYGAIN_TRACK_PEAK is written, so players cannot prevent it)")
+    print("  ReplayGain vs uncapped     :", describe(rg_true, "dB"))
+    print(f"  gains reduced by the cap   : {pct(capped, n)}")
+    print("  written peak vs real file  :", describe(e_peak, "dB"))
+    print(f"  files carrying a peak tag  : {pct(has_peak, n)}")
+    print(f"  files naming their target  : {pct(has_ref, n)}"
+          + (f", {wrong_ref} against a different one" if wrong_ref else ""))
+    print(f"  files that clip after gain : {pct(clip, n)}")
     R["loudness"] = {"vs_real": describe(e_true), "vs_mono": describe(e_mono),
                      "rg_internal": describe(rg_internal, "dB"),
-                     "rg_vs_real": describe(rg_true, "dB"), "clipping": clip}
+                     "rg_vs_uncapped": describe(rg_true, "dB"),
+                     "peak_vs_real": describe(e_peak, "dB"),
+                     "with_peak": has_peak, "with_reference": has_ref,
+                     "wrong_reference": wrong_ref,
+                     "capped": capped, "clipping": clip}
 
     # ---------- duration ----------
     dur_err, big, tlen_bad = [], [], 0
