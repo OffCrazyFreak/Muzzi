@@ -122,7 +122,23 @@ _UNDECOMPOSED = str.maketrans({
     "œ": "oe", "Œ": "OE",   # ethel
     "ß": "ss",              # sharp s
     "þ": "th", "Þ": "TH",   # thorn
+    # Same class, reached from Turkish and Maltese credits. Listed so the
+    # character loss this table exists to stop cannot return through a letter
+    # nobody thought of.
+    "ı": "i", "İ": "I",     # dotless i / dotted I, Turkish
+    "ħ": "h", "Ħ": "H",     # h with stroke, Maltese
+    "ŧ": "t", "Ŧ": "T",     # t with stroke
 })
+
+# The agreement below which a name is a different name. It lives beside fit()
+# because every caller that draws this line also calls fit(), and a copy in
+# each of them is how the audit tool started grading on its own number.
+MIN_FIT = 0.5
+
+# How far a lyric sheet's own duration may sit from the recording's before its
+# timings are refused. 2s is LRCLIB's /api/get signature tolerance, and what
+# LRCLIBee and Music Assistant both require.
+MAX_DURATION_DELTA = 2.0
 
 
 def norm(s):

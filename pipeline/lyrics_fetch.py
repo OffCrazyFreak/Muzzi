@@ -39,8 +39,9 @@ RETRY_STATUS = {429, 500, 502, 503, 504}
 
 # The agreement below which a name is a different name. Shared by the picker,
 # the fallback rule and write_tags' trust gate so all three draw the line in
-# the same place.
-MIN_FIT = 0.5
+# the same place. Defined next to fit() in webmatch and re-exported here,
+# because importing this module to read one float pulls in the HTTP client.
+from pipeline.webmatch import MIN_FIT  # noqa: F401  re-exported
 
 # Which selection rules produced a cache entry. Bump when a change would pick
 # a *different* hit than the entry already holds, so entries chosen by the old
@@ -271,9 +272,18 @@ def _rescore(entry, artist, title):
 
 
 def _good(entry):
-    """-> True when a re-scored entry still passes the current rules."""
+    """-> True when a re-scored entry still passes the current rules.
+
+    A plain-only hit is not final. The deaccented variants this selector adds
+    are exactly the queries that find the synced sheet a diacritic hid, and a
+    title carrying diacritics misses synced lyrics at 27.1% against 14.1%
+    without them. Some of those misses are cached as plain-only `ok` entries
+    rather than as `absent`, so freezing them here would put the timings out
+    of reach for good. Re-asking costs one search.
+    """
     return (entry.get("artist_fit", 0) >= MIN_FIT
-            and entry.get("title_fit", 0) >= MIN_FIT)
+            and entry.get("title_fit", 0) >= MIN_FIT
+            and bool(entry.get("synced")))
 
 
 def fetch(artist, title, cache, session, album=None, duration=None):
@@ -386,8 +396,12 @@ def fetch(artist, title, cache, session, album=None, duration=None):
                "matched_duration": best.get("duration"),
                # Stamped rather than recomputed downstream, so write_tags and
                # the audit grade the entry on the same numbers the picker used.
-               "artist_fit": round(fit(artist, ma), 3) if artist else None,
-               "title_fit": round(fit(title, mt), 3) if title else None,
+               # None, not 0.0, where the hit named nothing: the gates above
+               # accept a hit with no artistName on purpose, and fit(x, "") is
+               # 0.0, which the write side would read as a measured
+               # disagreement and throw the lyrics away.
+               "artist_fit": round(fit(artist, ma), 3) if (artist and ma) else None,
+               "title_fit": round(fit(title, mt), 3) if (title and mt) else None,
                "selector": SELECTOR}
         cache[key] = out
         return out

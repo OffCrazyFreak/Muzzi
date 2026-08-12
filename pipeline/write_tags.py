@@ -92,14 +92,11 @@ _LRC_STAMP = re.compile(r"\[\d+:\d+[.:]\d+\]")
 # language, it is noise that happens to be spelled in one.
 MIN_DISTINCT_WORDS = 20
 
-# Same line the picker draws, imported rather than repeated so the write side
-# cannot start disagreeing with the side that chose the entry.
-from pipeline.lyrics_fetch import MIN_FIT  # noqa: E402
-
-# How far a lyric sheet's own duration may sit from the recording's before its
-# timings are refused. 2s is LRCLIB's /api/get signature tolerance, and what
-# LRCLIBee and Music Assistant both require.
-MAX_DURATION_DELTA = 2.0
+# Same lines the picker draws, imported rather than repeated so the write side
+# cannot start disagreeing with the side that chose the entry. They live beside
+# fit() in webmatch, which every consumer already imports: reading them from
+# lyrics_fetch meant loading the HTTP client to get two floats.
+from pipeline.webmatch import MIN_FIT, MAX_DURATION_DELTA  # noqa: E402
 
 
 def lyrics_trustworthy(entry, verified, artist, title=None):

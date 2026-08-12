@@ -315,6 +315,7 @@ def timing_rows(rows):
     in stats["trim_failed"] and writes no cache, so this sheet cannot see it.
     """
     from pipeline.write_tags import lyrics_trustworthy, lyrics_timing_ok
+    from pipeline import silence
 
     sil = _load(SILENCE)
     align = _load(ALIGN)
@@ -342,7 +343,7 @@ def timing_rows(rows):
     for r in rows:
         p = r.get("path")
         s, a = sil.get(p) or {}, align.get(p) or {}
-        why = []
+        why, lyric_reason = [], None
         if s.get("hinted") is not None:
             continue                     # you already answered this one
         if s.get("decision") == "review_long":
@@ -361,16 +362,24 @@ def timing_rows(rows):
         if isinstance(entry, dict) and (entry.get("synced") or entry.get("plain")):
             ok, reason = lyrics_trustworthy(entry, verified.get(p), art, tit)
             if ok and entry.get("synced"):
+                # The cut write_tags applies, not the one merely recorded: a
+                # review_long row carries a figure that is never taken, and
+                # judging against it invents refusals write_tags never made.
+                # Importing the gate is not enough while the input differs.
                 ok, reason = lyrics_timing_ok(entry, secs.get(p),
-                                              s.get("cut", 0.0))
+                                              silence.cut_for(s))
             # The ten-second rows above already say this, in more detail.
             if not ok and a.get("status") != "wrong_recording":
                 why.append(f"{_SAY.get(reason, reason)} "
                            f"(matched {entry.get('matched') or 'nothing'})")
+                lyric_reason = reason
         if not why:
             continue
         row = dict(r)
         row["reasons"] = why
+        # The code, not the sentence. The sort below used to search the prose
+        # in _SAY, so rewording a cell silently reordered the sheet.
+        row["lyric_reason"] = lyric_reason
         out.append(row)
     # Actionable first, then longest silence, then biggest version mismatch:
     # the rows where doing nothing costs the most, and where doing something
@@ -384,8 +393,7 @@ def timing_rows(rows):
     def worst(r):
         p = r.get("path")
         s, a = sil.get(p) or {}, align.get(p) or {}
-        fixable = any("artist_aliases" in w or "different song" in w
-                      for w in r["reasons"])
+        fixable = r.get("lyric_reason") in ("wrong_artist", "wrong_title")
         return (0 if fixable else 1,
                 -(max(s.get("lead") or 0,
                       abs((a.get("duration_delta") or 0)) / 10.0)))

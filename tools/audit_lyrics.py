@@ -34,12 +34,14 @@ import sys
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
-from pipeline.webmatch import fit  # noqa: E402
+from pipeline.webmatch import fit, MIN_FIT  # noqa: E402
+from pipeline import silence  # noqa: E402
 
 CACHE = os.path.join(HERE, "cache")
 LYRICS = os.path.join(CACHE, "lyrics.json")
 REVIEW = os.path.join(CACHE, "review.json")
 ANALYSIS = os.path.join(CACHE, "analysis.json")
+SILENCE = os.path.join(CACHE, "silence.json")
 DEFAULT_OUT = os.path.join(CACHE, "audit_lyrics.json")
 DEFAULT_LRC = os.path.join(HERE, "out", "_all")
 
@@ -47,7 +49,9 @@ DEFAULT_LRC = os.path.join(HERE, "out", "_all")
 # even if that module cannot import faster_whisper.
 _TS = re.compile(r"\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]")
 
-FIT_GATE = 0.5
+# The pipeline's own line, imported rather than declared here: a local copy
+# is how this tool would start grading on a number write_tags stopped using.
+FIT_GATE = MIN_FIT
 
 
 def stamps(text):
@@ -64,12 +68,18 @@ def load(path):
     return json.load(open(path)) if os.path.exists(path) else {}
 
 
-def grade(entry, artist, title, decoded_secs, gate):
+def grade(entry, artist, title, decoded_secs, gate, cut=0.0):
     """-> dict of the three quality signals for one cache entry.
 
     Returns None values rather than guesses where the input is missing: a
     legacy entry with no 'matched' cannot be graded on artist or title, and
     saying so is the point (121 such entries skip every check today).
+
+    `cut` is subtracted for the same reason write_tags subtracts it:
+    decoded_secs describes the untrimmed source, and the copy that carries the
+    sidecar is that much shorter. Omitting it made this tool report a different
+    verdict from the write stage on exactly the trimmed tracks the gate was
+    tuned for.
     """
     matched = entry.get("matched") or ""
     md = entry.get("matched_duration")
@@ -77,7 +87,8 @@ def grade(entry, artist, title, decoded_secs, gate):
     if " - " in matched:
         ma, _, mt = matched.partition(" - ")
         art_fit, tit_fit = round(fit(artist, ma), 3), round(fit(title, mt), 3)
-    delta = round(decoded_secs - md, 2) if (decoded_secs and md) else None
+    shipped = (decoded_secs - (cut or 0.0)) if decoded_secs else None
+    delta = round(shipped - md, 2) if (shipped and md) else None
     reasons = []
     if art_fit is not None and art_fit < FIT_GATE:
         reasons.append("wrong_artist")
@@ -96,20 +107,16 @@ def grade(entry, artist, title, decoded_secs, gate):
             "reasons": reasons}
 
 
-def scan_sidecars(root):
-    """-> {stem: [seconds]} for every .lrc under root."""
-    out = {}
-    for dp, _, names in os.walk(root):
-        for n in names:
-            if not n.lower().endswith(".lrc"):
-                continue
-            p = os.path.join(dp, n)
-            try:
-                with open(p, encoding="utf-8") as fh:
-                    out[os.path.splitext(p)[0]] = stamps(fh.read())
-            except Exception:
-                out[os.path.splitext(p)[0]] = []
-    return out
+def count_sidecars(root):
+    """-> how many .lrc files sit under root.
+
+    The bodies are not read. Matching a stem back to a review row is
+    unreliable after renaming, so the stamps are judged against the cache
+    entry's own duration evidence instead, and parsing every sidecar here was
+    a full read of the output tree that nothing consumed.
+    """
+    return sum(1 for _, _, names in os.walk(root)
+               for n in names if n.lower().endswith(".lrc"))
 
 
 def main():
@@ -125,6 +132,7 @@ def main():
     args = ap.parse_args()
 
     lyr, review, ana = load(LYRICS), load(REVIEW), load(ANALYSIS)
+    sil = load(SILENCE)
     if not lyr:
         sys.exit(f"no lyric cache at {LYRICS}")
     dur = {v["path"]: v.get("decoded_secs")
@@ -160,12 +168,14 @@ def main():
             continue
         artist, _, title = k.rpartition("|")
         r = row_for.get(k)
-        g = grade(e, artist, title, dur.get(r["path"]) if r else None, args.gate)
+        p = r["path"] if r else None
+        cut = silence.cut_for(sil.get(p)) if p else 0.0
+        g = grade(e, artist, title, dur.get(p) if p else None, args.gate, cut)
         g["key"], g["balkan"] = k, bool(r and r.get("balkan"))
-        g["path"] = r["path"] if r else None
+        g["path"], g["cut"] = p, cut
         graded[k] = g
 
-    sidecars = scan_sidecars(args.lrc_dir) if os.path.isdir(args.lrc_dir) else {}
+    sidecars = count_sidecars(args.lrc_dir) if os.path.isdir(args.lrc_dir) else 0
     # A sidecar whose last timestamp lands past the end of the audio can never
     # fire. Matching stems back to a review row is unreliable after renaming,
     # so this is counted against the sheet's own duration evidence instead.
@@ -175,7 +185,7 @@ def main():
             continue
         e = lyr.get(g["key"], {})
         st = stamps(e.get("synced"))
-        if st and max(st) > g["decoded_secs"]:
+        if st and max(st) > g["decoded_secs"] - (g.get("cut") or 0.0):
             past_end += 1
 
     # What the write stage would actually do with this cache. Grading the
@@ -204,7 +214,7 @@ def main():
         if not e.get("synced"):
             written["plain"] += 1
             continue
-        ok, why = lyrics_timing_ok(e, g["decoded_secs"])
+        ok, why = lyrics_timing_ok(e, g["decoded_secs"], g.get("cut") or 0.0)
         if ok:
             written["synced"] += 1
         else:
@@ -226,7 +236,7 @@ def main():
         "4_stamps_past_end": past_end,
         "5_ungradeable_legacy": sum(1 for g in syn if g["artist_fit"] is None),
         "6_synced_coverage": cov["synced"],
-        "7_lrc_on_disk": len(sidecars),
+        "7_lrc_on_disk": sidecars,
     }
     bal = [g for g in syn if g["balkan"] and g["delta"] is not None]
     oth = [g for g in syn if not g["balkan"] and g["delta"] is not None]
