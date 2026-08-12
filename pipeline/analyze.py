@@ -485,31 +485,47 @@ def _audit_truth_seed():
     return seed
 
 
-def refresh_loudness(workers):
+def refresh_loudness(workers, force=False):
     """Re-measure loudness and true peak for entries the old code wrote.
 
     Every entry cached before ffmpeg took over carries a mono-downmix figure
     that reads 0.76 dB quiet on average, and no peak at all -- so ReplayGain
     computed from it is wrong and cannot be capped against clipping. Entries
     already carrying `loudness_method` were measured the new way and are left
-    alone, which is what makes this safe to re-run.
+    alone, which is what makes this safe to re-run. `force` re-measures them
+    anyway, for when the cached figures are distrusted rather than merely old
+    -- about 6 minutes for this library, against an hour for a full --force.
 
     Entries whose file has since moved are left exactly as they were: a
     missing file is not evidence that the cached number is wrong.
+
+    NOTE what this cannot fix. These entries describe the SOURCE files, and
+    write_tags copies those to out/_all. Anything that edits an output copy
+    after the fact -- trimming silence off it, say -- leaves that copy's
+    ReplayGain describing audio it no longer contains, and no amount of
+    re-measuring the source will show it, because the source did not change.
+    That case needs the output re-measured and re-tagged, and the thing that
+    catches it is tools/audit_compare.py, which measures out/_all itself.
     """
     if not os.path.exists(CACHE):
         print(f"  no {CACHE}, nothing to refresh\n")
         return
     done = json.load(open(CACHE))
 
-    seed = _audit_truth_seed()
-    print(f"  {len(seed)} measurements available from {os.path.basename(AUDIT_TRUTH)}")
+    seed = {} if force else _audit_truth_seed()
+    if force:
+        print("  --force: re-measuring every entry, ignoring cached values")
+    else:
+        print(f"  {len(seed)} measurements available from "
+              f"{os.path.basename(AUDIT_TRUTH)}")
 
     seeded = gone = 0
     todo = []
     for fp, entry in done.items():
         path = entry.get("path")
-        if entry.get("error") or not path or entry.get("loudness_method"):
+        if entry.get("error") or not path:
+            continue
+        if entry.get("loudness_method") and not force:
             continue
         hit = seed.get(os.path.basename(path))
         if hit:
@@ -598,7 +614,7 @@ def main():
     if args.refresh_bitrate:
         return refresh_bitrate()
     if args.refresh_loudness:
-        return refresh_loudness(args.workers)
+        return refresh_loudness(args.workers, force=args.force)
     if not args.root:
         ap.error("a root directory is required unless --refresh-bitrate "
                  "or --refresh-loudness")

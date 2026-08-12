@@ -393,6 +393,21 @@ while ffmpeg returns loudness and true peak together in about 1.9 s.
 and `tools/audit_truth.py` so the pipeline and the tool that grades it cannot
 drift apart.
 
+**Anything that edits an output file after tagging invalidates its
+ReplayGain.** `cache/analysis.json` describes the *source* files; `write_tags`
+copies those into `out/_all`. Trimming silence off a copy, re-encoding it, or
+otherwise touching its audio leaves the tags describing audio the file no
+longer contains. Integrated loudness barely moves -- BS.1770 gates silence out
+anyway -- but the true peak does, and with it the clipping cap, which currently
+reduces the gain on 175 files.
+
+`analyze.py --refresh-loudness` will **not** catch this, and cannot: it
+re-measures the source, which did not change. Nor will `--force`. The check
+that does catch it is `tools/audit_compare.py`, which measures `out/_all`
+itself and reports the written gain against the real file. So a stage that
+edits output audio owns re-tagging what it edited, and the audit is what proves
+it did.
+
 **BPM.** Three engines vote (Essentia RhythmExtractor2013 multifeature, degara,
 PercivalBpmEstimator). Validated 20/20 within 4% against published values for
 well-known tracks. On an octave disagreement the **lower** value wins, because
