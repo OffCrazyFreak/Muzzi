@@ -93,6 +93,9 @@ different rule when the code is ambiguous.
 - Poll with a pattern that matches your own process. `pgrep -f` and `pkill -f`
   match the shell running them, so the loop never exits and the kill can take
   you with it. Background the long job instead.
+- Redraw a verification sample, or write `targets.txt`, after seeing results.
+  A sample chosen to fit the answer is not a sample, and a target list written
+  afterwards is a description of what happened rather than a test of it.
 - Commit or push unless asked. When asked, include only that task's changes.
 
 ## Ask first
@@ -186,6 +189,23 @@ themselves wrong, which is worse than not verifying: a passing check reads as
 proof. There is no test suite. Say which commands you ran, which you did not,
 and what is therefore still unproven. A green `ruff` never implies behaviour
 works.
+
+### Baseline before, diff after
+
+One track is not evidence. Verify against a sample, never against the track
+that prompted the fix. Run these with `./.venv/bin/python`, like every stage.
+
+1. `tools/sample.py --issue SLUG` freezes a deterministic 10%. Add what the
+   issue is about: `--add "artist:Rasta"`.
+2. Write the tracks you expect to change to `baseline/SLUG/targets.txt`,
+   before the fix, not after.
+3. `tools/snapshot.py --issue SLUG --label before`, make the change, then
+   `--label after`. Add `--level out` when the fix touches what gets written;
+   build that output with `write_tags.py --only baseline/SLUG/paths.txt
+   --out <your worktree>/out/_all`.
+4. `tools/snapdiff.py --issue SLUG`. **Missed** means the fix did nothing.
+   **Collateral** means it broke something else. Both are failures. Quote the
+   counts in the PR.
 
 ## Commits
 

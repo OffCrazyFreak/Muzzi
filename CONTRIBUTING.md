@@ -42,6 +42,12 @@ and `bin/fpcalc`, then run against a copy of a few files:
 - **Source folders are read-only.** Nothing may write to the input.
 - **CI runs `ruff check .`.** Run it locally first. The rule set in `ruff.toml`
   is narrow on purpose: real defects, not style.
+- **Verify against a sample, not one track.** `tools/sample.py` freezes a 10%
+  of the library, `tools/snapshot.py` records it before and after your change,
+  and `tools/snapdiff.py` splits the difference into what you meant to change
+  and what you did not. Write the expected tracks to `targets.txt` before
+  making the change, and quote the counts in the PR. The README has the full
+  sequence under "Verifying a change".
 
 ## Commits and PRs
 

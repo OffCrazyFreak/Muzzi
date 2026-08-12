@@ -27,6 +27,9 @@ cache/
 out/
 # per-track Essentia feature dumps
 features/
+# frozen verification samples and before/after snapshots: they list real
+# filenames, so they describe the library as surely as hints.tsv does
+baseline/
 # audio fetched to replace low-quality copies
 redownloaded/
 # faster-whisper weights, downloaded on first use
