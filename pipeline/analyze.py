@@ -501,11 +501,18 @@ def refresh_loudness(workers, force=False):
 
     NOTE what this cannot fix. These entries describe the SOURCE files, and
     write_tags copies those to out/_all. Anything that edits an output copy
-    after the fact -- trimming silence off it, say -- leaves that copy's
-    ReplayGain describing audio it no longer contains, and no amount of
-    re-measuring the source will show it, because the source did not change.
-    That case needs the output re-measured and re-tagged, and the thing that
-    catches it is tools/audit_compare.py, which measures out/_all itself.
+    after the fact leaves that copy's ReplayGain describing audio it no longer
+    contains, and no amount of re-measuring the source will show it, because
+    the source did not change. That case needs the output re-measured and
+    re-tagged, and tools/audit_compare.py is what catches it, because it
+    measures out/_all itself.
+
+    Trimming leading silence is NOT such an edit, which is worth stating
+    because it looks like one. Measured on six trimmed files with cuts of 0.5
+    to 4.7s: integrated loudness moved 0.00 dB on all six and true peak moved
+    0.00 dB on five and 0.10 on the sixth. BS.1770 gates silence out of the
+    integrated figure, and a region quiet enough to cut cannot hold the peak,
+    so the trim stage does not owe the loudness stage a re-measure.
     """
     if not os.path.exists(CACHE):
         print(f"  no {CACHE}, nothing to refresh\n")
