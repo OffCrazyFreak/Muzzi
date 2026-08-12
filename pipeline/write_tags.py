@@ -579,7 +579,11 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
                 ident.get("lead_artist") or ident.get("artist"),
                 ident.get("title"), ident.get("year"),
                 extra.get("discogs_styles"), primary)
-            primary = chosen or primary
+            # Not "chosen or primary". The MP3 path clears the genre when the
+            # ranking declines to pick one, and falling back here instead left
+            # the same track tagged Pop as m4a and untagged as mp3. Both
+            # containers get one answer or none.
+            primary = chosen
         peak = audio.get("true_peak")
         gain = rg_gain(audio.get("loudness_lufs"), peak)
         write_generic(dst, {
