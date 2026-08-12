@@ -21,8 +21,14 @@ import argparse
 import json
 import re
 import sys
+import os
 import unicodedata
 from collections import defaultdict
+
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, HERE)
+
+from pipeline import artist_names  # noqa: E402
 
 # Rule 3: three or more capitals in a row. Two is a normal initialism ("DJ"),
 # three is a name that came off a shouting YouTube title.
@@ -60,8 +66,14 @@ SEPARATOR = ";"
 
 
 def components(name):
-    """-> the individual artists in one artist field."""
-    return [p.strip() for p in (name or "").split(SEPARATOR) if p.strip()]
+    """-> the individual artists in one artist field.
+
+    Splits the way write_tags does, not on ";" alone. A credit joined by "&",
+    "x", "i" or a feature marker is several artists to the writer, so an audit
+    that keeps it whole reports violations the writer will never produce, and
+    misses the ones it will.
+    """
+    return artist_names.split_credit(name)
 
 # Rule 4: the transliterations that turn one name into two. English spelling
 # on the left, Croatian on the right.

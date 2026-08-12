@@ -53,14 +53,23 @@ def classify(hint):
     if not h.lower().startswith(("http://", "https://")):
         return "text"
     u = urlparse(h)
-    host = (u.netloc or "").lower().removeprefix("www.")
+    host = (u.netloc or "").lower().split(":")[0].removeprefix("www.")
+
+    def is_host(dom):
+        # On a label boundary, not a suffix: endswith() alone makes
+        # "notyoutube.com" a YouTube host.
+        dom = dom.removeprefix("www.")
+        return host == dom or host.endswith("." + dom)
+
     for dom, path in SEARCH_MARKERS:
-        if host.endswith(dom.removeprefix("www.")) and u.path.startswith(path):
+        if is_host(dom) and u.path.startswith(path):
             # duckduckgo puts the query in ?q= on the root path.
             if dom == "duckduckgo.com" and not parse_qs(u.query).get("q"):
                 continue
             return "search"
-    if TRACK_RE.search(h):
+    # Host and path, not the whole string: a query parameter containing
+    # "youtube.com/watch" would otherwise make any URL a track link.
+    if TRACK_RE.search(host + u.path):
         return "track"
     return "other-url"
 
