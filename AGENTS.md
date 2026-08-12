@@ -143,7 +143,11 @@ branch-scoped, and git will not warn you, because git is not watching them.
 - **Read-only is fine.** Copy what you need into your worktree and work on the
   copy. Data flows in, never back out.
 - **Never delete or prune shared state** to get a clean run. Someone else is
-  mid-run in it.
+  mid-run in it. In particular, never run `git clean -xfd` in the main
+  checkout: it deletes ignored files, which here means the caches, the whole
+  of `out/`, and `hints.tsv`, the file holding every review answer ever given
+  and the one thing nothing can regenerate. Use `git stash -u`, or a fresh
+  worktree, when you need a clean tree.
 
 If your change needs pipeline output to prove it works, build that output from
 a handful of files inside your own worktree.
