@@ -26,7 +26,7 @@ import requests
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 from pipeline.identify import (  # noqa: E402
-    RateLimiter, TYPE_RANK, _BOOTLEG_DATE, _COMPILATION_HINT, _FEAT, norm, sim,
+    RateLimiter, TYPE_RANK, _BOOTLEG_DATE, _COMPILATION_HINT, _FEAT, sim,
 )
 from pipeline.probe_match import split_name  # noqa: F401
 from pipeline import tagseed  # noqa: E402

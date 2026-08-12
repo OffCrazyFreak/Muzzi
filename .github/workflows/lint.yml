@@ -1,0 +1,50 @@
+name: lint
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned by commit, with the tag in the comment. A tag can be moved;
+      # a commit cannot.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes, so the token has no reason to survive the
+          # step and end up in .git/config or an artifact.
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      # Pinned so a ruff release cannot turn CI red on its own. The rule set
+      # lives in ruff.toml, not here.
+      - run: pip install ruff==0.16.2
+      - run: ruff check .
+
+  dashes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Markdown only. The em and en dashes in the pipeline's regexes are
+      # there to match real song titles ("Artist - Title"), so Python is not
+      # checked. A reminder in AGENTS.md was not enough on its own.
+      - name: No em or en dashes in Markdown
+        run: |
+          # Exit codes are read explicitly: git grep says 0 for found, 1 for
+          # none, anything else for a real failure such as a build without
+          # PCRE. A bare `if` would read that failure as "none found" and
+          # pass, which is a check that can never fail.
+          git grep -nP '[\x{2013}\x{2014}]' -- '*.md' && rc=0 || rc=$?
+          case "$rc" in
+            0) echo "::error::Use a plain hyphen. See AGENTS.md." ; exit 1 ;;
+            1) echo "No em or en dashes found." ;;
+            *) echo "::error::dash check could not run (git grep exit $rc)"
+               exit 1 ;;
+          esac

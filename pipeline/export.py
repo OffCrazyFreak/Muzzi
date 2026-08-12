@@ -23,7 +23,6 @@ import shutil
 import sys
 from collections import defaultdict
 
-from mutagen.mp3 import MP3
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
@@ -78,18 +77,6 @@ def main():
     allpath = os.path.join(args.out, "_all")
     if not os.path.isdir(allpath):
         sys.exit(f"no tagged output at {allpath} - run write_tags.py first")
-
-    analysis = {v["path"]: v for v in
-                json.load(open(os.path.join(HERE, "cache", "analysis.json"))).values()
-                if v.get("path")}
-    verify = {}
-    vp = os.path.join(HERE, "cache", "lyric_verify.json")
-    if os.path.exists(vp):
-        verify = json.load(open(vp))
-    # analysis/verify are keyed by SOURCE path; map via basename of the source.
-    by_srcname = {os.path.basename(k): v for k, v in analysis.items()}
-    lang_by_srcname = {os.path.basename(k): v.get("language")
-                       for k, v in verify.items()}
 
     # Artist origin, for splitting the Balkan crate into real scenes. Keyed
     # case-folded because the tag's capitalisation and the resolver's need not

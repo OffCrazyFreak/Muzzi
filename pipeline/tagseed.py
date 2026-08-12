@@ -217,7 +217,6 @@ def seed_for(path, stem_fallback):
 
 def main():
     import argparse
-    import json
     from collections import Counter
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     ap = argparse.ArgumentParser(description=__doc__)

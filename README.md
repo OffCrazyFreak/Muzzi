@@ -8,6 +8,11 @@ No library database. Everything that matters travels with the audio, so it
 survives a copy to a phone. Built specifically to handle Croatian, Serbian and
 Bosnian music, which MusicBrainz and Picard barely cover.
 
+beets, Picard and wrtag all assume the catalogue knows your music. For this one
+it does not, so Muzzi scores every match, sends what it cannot settle to a
+review queue, remembers your answers permanently, and checks the audio against
+the lyrics before it trusts a name. beets does the tag writing underneath.
+
 Your source folders are never modified. Every stage writes to `cache/`, and
 only the last stage writes audio -- as copies, into `out/_all`.
 
@@ -52,7 +57,9 @@ That is why:
 
 ## Requirements
 
-- Linux (developed on Mint), Python 3.9+
+- Linux (developed on Mint), Python 3.11 to 3.14. The pins in
+  `requirements.txt` set the floor (numpy needs 3.11) and the ceiling (beets
+  needs below 3.15). Built and verified on 3.12.
 - `ffmpeg`, `yt-dlp`
 - Node 22+ or Deno 2.3+, only for age-restricted YouTube videos: yt-dlp needs a
   JavaScript runtime to solve their challenge (`--js-runtimes node`, plus the
@@ -69,9 +76,7 @@ the same commands work on a laptop or a VPS. Override with `-j N`.
 ```bash
 cd Muzzi
 python3 -m venv .venv
-./.venv/bin/pip install beets pyacoustid python3-discogs-client pylast \
-    mutagen langdetect essentia beautifulsoup4 requests_oauthlib Pillow \
-    ytmusicapi odfpy faster-whisper
+./.venv/bin/pip install -r requirements.txt
 
 # Chromaprint fingerprinter
 mkdir -p bin && curl -fsSL -o /tmp/fp.tgz \
@@ -555,6 +560,15 @@ it holds every answer you have given, and nothing can reproduce it.
 
 Each `pipeline/*.py` runs standalone with `--help` and its docstring explains
 what it does and why it does it that way.
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has
+the setup, what is most useful to work on, and the rules. `AGENTS.md` holds the
+project conventions, for humans and coding agents alike. Security reports go
+through [SECURITY.md](SECURITY.md), not a public issue.
 
 ---
 

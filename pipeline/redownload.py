@@ -307,7 +307,7 @@ def main():
             print(f"    {an.get('spectral_cutoff_hz'):>6}Hz  "
                   f"{str(row.get('proposed_artist'))[:22]:22} | "
                   f"{str(row.get('proposed_title'))[:34]}")
-        print(f"\n  dry run; nothing downloaded\n")
+        print("\n  dry run; nothing downloaded\n")
         return 0
 
     os.makedirs(STAGE_DIR, exist_ok=True)

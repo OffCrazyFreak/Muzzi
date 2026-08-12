@@ -27,7 +27,6 @@ import os
 import re
 import sys
 import time
-import threading
 import unicodedata
 from concurrent.futures import (ProcessPoolExecutor, ThreadPoolExecutor,
                                 as_completed)
@@ -46,7 +45,6 @@ ANALYSIS = os.path.join(HERE, "cache", "analysis.json")
 MODELS = os.path.join(HERE, "models")
 
 LRCLIB = "https://lrclib.net/api/search"
-from pipeline.useragent import UA  # noqa: E402
 
 
 _LRC_TS = re.compile(r"\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]")
@@ -227,7 +225,6 @@ def main():
     # lyrics_fetch, so threads only hide latency, they do not raise the rate.
     t0 = time.time()
     need, texts = [], {}
-    lock = threading.Lock()
 
     def fetch(r):
         ly = lyrics_fetch.fetch(r["proposed_artist"], r["proposed_title"],
