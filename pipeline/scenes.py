@@ -22,7 +22,8 @@ Nothing here invents a genre. A track with no evidence gets no genre tag,
 because a blank field is better than a wrong one.
 
 Imported by the pipeline for genre_for(). Run directly, it reports what the
-ranking would decide for every track in cache/review.json and changes nothing.
+ranking would decide for each track in cache/review.json that has a proposed
+artist, skipping the rest, and changes nothing.
 
 Usage: scenes.py
 """

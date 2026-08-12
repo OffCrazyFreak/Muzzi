@@ -29,6 +29,6 @@ reviews:
       instructions: >-
         No em dashes or en dashes. Flag any claim about player behaviour that
         does not name the player.
-tools:
-  ruff:
-    enabled: true
+  tools:
+    ruff:
+      enabled: true
