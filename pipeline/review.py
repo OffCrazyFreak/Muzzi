@@ -289,14 +289,16 @@ def timing_rows(rows):
     total confidence and still open with eight seconds of dead air, or carry a
     lyric sheet written for a different recording.
 
-    Four kinds of row, worst first:
+    Three kinds of row, worst first:
 
       * head silence too long to cut blind -- almost always a quiet intro
         rather than dead air, and cutting it would decapitate the song
       * the lyric sheet's duration disagrees with the file by more than ten
         seconds, so it belongs to another recording and no offset can fix it
       * trimmed, but the lyric alignment could not be measured
-      * the cut was wanted and did not happen
+
+    A cut that was wanted and did not happen is not here: write_tags counts it
+    in stats["trim_failed"] and writes no cache, so this sheet cannot see it.
     """
     sil = _load(SILENCE)
     align = _load(ALIGN)

@@ -33,11 +33,16 @@ _OFFSET = re.compile(r"^\s*\[offset:\s*([+-]?\d+)\s*\]\s*$",
 
 
 def _seconds(mm, ss, frac):
-    """-> a stamp's value in seconds. `frac` keeps its own precision: two
-    digits are centiseconds, three are milliseconds."""
+    """-> a stamp's value in seconds. `frac` keeps its own precision: one
+    digit is tenths, two are centiseconds, three are milliseconds.
+
+    The scale comes from the digit count rather than a two-way test, because
+    _STAMP accepts one to three digits and reading ".3" as centiseconds turns
+    12.3s into 12.03s.
+    """
     out = int(mm) * 60 + int(ss)
     if frac:
-        out += int(frac) / (1000.0 if len(frac) == 3 else 100.0)
+        out += int(frac) / float(10 ** len(frac))
     return out
 
 
@@ -46,8 +51,13 @@ def _format(sec, open_ch, sep, digits, close_ch):
     sec = max(0.0, sec)
     mm, rest = divmod(sec, 60)
     if not digits:
-        return f"{open_ch}{int(mm):02d}:{int(round(rest)):02d}{close_ch}"
-    scale = 1000 if digits == 3 else 100
+        # Same carry the fractional branch does below: rounding 59.7 up must
+        # become the next minute, not ":60".
+        whole = int(round(rest))
+        if whole >= 60:
+            mm, whole = mm + 1, whole - 60
+        return f"{open_ch}{int(mm):02d}:{whole:02d}{close_ch}"
+    scale = 10 ** digits
     ticks = int(round(rest * scale))
     # Rounding 59.999 up must carry into the minute, not print ":60.00".
     if ticks >= 60 * scale:

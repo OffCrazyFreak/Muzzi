@@ -42,6 +42,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
 REVIEW = os.path.join(HERE, "cache", "review.json")
+ANALYSIS = os.path.join(HERE, "cache", "analysis.json")
 OUT = os.path.join(HERE, "cache", "silence.json")
 
 # Below this, silence is silence and the noise floor does not get a vote.
@@ -210,7 +211,18 @@ def main():
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
 
-    rows = json.load(open(REVIEW))
+    # This stage runs beside `analyze`, before the first `review`, so on a
+    # first run review.json does not exist yet. Raising here would take the
+    # whole chain down with it and `dedupe` would never run, which is how a
+    # duplicate copy reaches the output. All that is needed is a list of
+    # source paths, and analyze has just written one.
+    if os.path.exists(REVIEW):
+        rows = json.load(open(REVIEW))
+    elif os.path.exists(ANALYSIS):
+        rows = [v for v in json.load(open(ANALYSIS)).values() if v.get("path")]
+    else:
+        print("  no track list yet: run fingerprint and analyze first\n")
+        return 0
     done = {} if args.force else (json.load(open(OUT))
                                   if os.path.exists(OUT) else {})
 
