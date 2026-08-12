@@ -330,6 +330,12 @@ def main():
 
     if args.level in ("out", "both"):
         shared = shared_checkout()
+        # Said out loud rather than failing open in silence: with no answer
+        # from git the guard below cannot fire, and a guard that quietly is
+        # not running is worse than none.
+        if shared is None:
+            print("  note: git could not name the main checkout, so the "
+                  "shared-output guard is not active")
         # Worktrees live under .claude/worktrees/ inside the main checkout, so
         # "inside the shared checkout" is true of your own tree as well. What
         # matters is being inside the shared checkout and outside your own.
