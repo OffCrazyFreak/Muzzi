@@ -610,6 +610,12 @@ $P tools/snapshot.py --issue m4a-genres --label before \
 Left off, it defaults to `out/_all` beside this checkout, and the snapshot
 records a build that has nothing to do with the one just made.
 
+Pointed at the main checkout's `out/_all`, which every session shares,
+`snapshot.py` refuses unless you pass `--allow-shared-read`. That check
+recognises the shared output whether it sits inside the checkout or is a
+symlink to another filesystem, so moving `out/` to a bigger partition does not
+quietly switch the guard off.
+
 `baseline/` is gitignored: it lists real filenames, so it describes the library
 the same way `hints.tsv` does. Delete `baseline/<issue>/` when the issue is
 closed.
