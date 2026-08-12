@@ -437,9 +437,17 @@ def write_generic(dst, fields, art_path, lyrics):
                 continue
             f[m[k]] = [int(v)] if k == "bpm" else [str(v)]
         for k, v in fields.items():
-            if k in m or v in (None, ""):
+            if k in m:
                 continue
-            f[f"----:com.apple.iTunes:{k.upper()}"] = [str(v).encode()]
+            atom = f"----:com.apple.iTunes:{k.upper()}"
+            if v in (None, ""):
+                # Same reason the mapped loop above pops rather than skips:
+                # this writes over the previous build, so a value we no longer
+                # stand behind survives unless it is deleted. Skipping made
+                # every freeform atom a one-way door.
+                f.pop(atom, None)
+                continue
+            f[atom] = [str(v).encode()]
         if art_path and os.path.exists(art_path):
             with open(art_path, "rb") as fh:
                 f["covr"] = [MP4Cover(fh.read(), imageformat=MP4Cover.FORMAT_JPEG)]
@@ -725,6 +733,11 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
     # Why a track has no lyrics, or no timings. Without this, "LRCLIB has
     # nothing for this song" and "we refused what LRCLIB had" look identical
     # from the outside, and the coverage figures cannot be read back.
+    #
+    # Cleared first: txxx() returns early on an empty value, so a track that
+    # was withheld on an earlier build and passes now would keep the old
+    # marker and read as still-refused.
+    t.delall("TXXX:MUZZI_LYRIC_WITHHELD")
     if extra.get("lyric_reason"):
         txxx("MUZZI_LYRIC_WITHHELD", extra["lyric_reason"])
 
