@@ -2,12 +2,11 @@
   "_note": "Hand-maintained scenes, because no database holds them. Last.fm knows nationality and Discogs knows style, but neither knows that Grse and z++ are one scene while Prljavo kazaliste and Bijelo dugme are another. Names are matched case- and diacritic-insensitively against the CANONICAL spelling artist_names produces. An artist may be a plain name, or {name, years} to limit it to a period -- which is how one act belongs to two scenes across its career.",
   "scenes": {
     "Croatian Trap": {
-      "_why": "Beat na moru and Drito lineups: the post-2015 Croatian trap and rap scene. Discogs styles Grse and Vojko V as Trap but has nothing for z++ or Zembo Latifa, and Last.fm has nothing for either, so this scene exists only as a list.",
+      "_why": "Beat na moru and Drito lineups: the post-2015 Croatian trap and rap scene. Discogs styles Grse and Vojko V as Trap but has nothing for z++ or Zembo Latifa, and Last.fm has nothing for either, so this scene exists only as a list. The roster is drawn from Beat na moru 2022, 2023, 2024 and 2025 (Medane beach, Punat) and Drito iz Arene and Drito iz Osijeka 2026. Playing one of those festivals is necessary but not sufficient: they book pop and indie guests too, which is why Vesna Pisarovic, Denis & Denis, Indira and Svemirko are not here. Connect was removed for the opposite reason: 2000s radio hip-hop that later cut trap singles, and on no lineup in any year.",
       "artists": [
         "Grše",
         "TTM",
         "30zona",
-        "Connect",
         "Podočnjaci",
         "Buč Kesidi",
         "Hiljson Mandela",
@@ -25,7 +24,10 @@
         "Porto Morto",
         "Hrvoyeahh",
         "kids from the sky",
-        "pocket palma"
+        "pocket palma",
+        "Ružno Pače",
+        "Špiro",
+        "Tej"
       ]
     },
     "Croatian Trash": {
