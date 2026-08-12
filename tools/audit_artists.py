@@ -65,8 +65,11 @@ def components(name):
 
 # Rule 4: the transliterations that turn one name into two. English spelling
 # on the left, Croatian on the right.
+# Longest digraph first: applied in list order, ("ch", "c") would reduce
+# "tch" to "tc" and ("tch", "c") could then never fire, so "Mitch" keyed to
+# "mitc" and a Mitch/Mic pair went unreported.
 TRANSLIT = [("x", "ks"), ("y", "j"), ("w", "v"), ("qu", "kv"), ("ck", "k"),
-            ("ph", "f"), ("th", "t"), ("sh", "s"), ("ch", "c"), ("tch", "c"),
+            ("ph", "f"), ("th", "t"), ("sh", "s"), ("tch", "c"), ("ch", "c"),
             ("dj", "d"), ("dz", "z"), ("ee", "i"), ("oo", "u"), ("c", "k")]
 
 # Rule 5: the diacritic pairs this library keeps losing.

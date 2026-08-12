@@ -60,6 +60,16 @@ ARTIST_SPLIT = re.compile(
     r"|\s+i\s+")
 
 
+def split_credit(credit):
+    """-> every artist named in a credit string, in order.
+
+    The counterpart to lead_of. A rule has to be keyed on one artist, because
+    every caller splits the credit before looking anything up, so the
+    generators that learn rules from the library have to split it too.
+    """
+    return [p.strip() for p in ARTIST_SPLIT.split(credit or "") if p.strip()]
+
+
 def lead_of(credit):
     """-> the lead artist in a credit string.
 
@@ -69,7 +79,7 @@ def lead_of(credit):
     which are not spelling equivalences and never match, because every caller
     splits the credit first and looks up one artist at a time.
     """
-    parts = [p.strip() for p in ARTIST_SPLIT.split(credit or "") if p.strip()]
+    parts = split_credit(credit)
     return parts[0] if parts else (credit or "")
 
 
@@ -179,8 +189,11 @@ def from_casing(rows, mapping):
     most-used spelling decides, and MusicBrainz overrules it when it knows."""
     seen = defaultdict(Counter)
     for r in rows:
-        a = r.get("proposed_artist")
-        if a:
+        # Split first, for the same reason from_musicbrainz has to: every
+        # caller looks a credit up one artist at a time, so a key built from
+        # the whole credit ("foo x bar") can never be found. Keying on the
+        # whole string here would repeat the bug this module was fixed for.
+        for a in split_credit(r.get("proposed_artist")):
             seen[fold(a)][a] += 1
     out = {}
     for key, spellings in seen.items():
@@ -236,13 +249,13 @@ def from_typos(rows, mapping):
     """
     seen, spell, best_conf = Counter(), {}, {}
     for r in rows:
-        a = r.get("proposed_artist")
-        if not a:
-            continue
-        k = fold(a)
-        seen[k] += 1
-        spell.setdefault(k, Counter())[a] += 1
-        best_conf[k] = max(best_conf.get(k, 0), r.get("confidence") or 0)
+        # Split for the same reason from_casing does: a rule keyed on a whole
+        # credit is a rule nothing looks up.
+        for a in split_credit(r.get("proposed_artist")):
+            k = fold(a)
+            seen[k] += 1
+            spell.setdefault(k, Counter())[a] += 1
+            best_conf[k] = max(best_conf.get(k, 0), r.get("confidence") or 0)
 
     def name_of(k):
         return spell[k].most_common(1)[0][0]
