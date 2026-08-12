@@ -193,7 +193,7 @@ works.
 ### Baseline before, diff after
 
 One track is not evidence. Verify against a sample, never against the track
-that prompted the fix.
+that prompted the fix. Run these with `./.venv/bin/python`, like every stage.
 
 1. `tools/sample.py --issue SLUG` freezes a deterministic 10%. Add what the
    issue is about: `--add "artist:Rasta"`.

@@ -531,7 +531,7 @@ session teardown kills it mid-run.
 ```
 run.py                  the only entry point you need
 pipeline/               one file per stage, each runnable alone
-tools/                  standalone helpers (sample.py, snapshot.py, snapdiff.py)
+tools/                  standalone helpers (sample, snapshot, snapdiff)
 config/                 keys and hand-maintained corrections
 cache/                  every stage's output; safe to delete, expensive to rebuild
 out/_all                the result
@@ -571,12 +571,13 @@ most of what it was meant to fix, and a fix that also changed something else.
 Freeze a sample, snapshot it, change the code, snapshot it again, diff:
 
 ```bash
-tools/sample.py --issue m4a-genres --add "artist:Rasta"   # freeze a 10%
-$EDITOR baseline/m4a-genres/targets.txt                   # BEFORE the change
-tools/snapshot.py --issue m4a-genres --label before
+P=./.venv/bin/python
+$P tools/sample.py --issue m4a-genres --add "artist:Rasta"  # freeze a 10%
+$EDITOR baseline/m4a-genres/targets.txt                     # BEFORE the change
+$P tools/snapshot.py --issue m4a-genres --label before
 # ... make the change ...
-tools/snapshot.py --issue m4a-genres --label after
-tools/snapdiff.py --issue m4a-genres
+$P tools/snapshot.py --issue m4a-genres --label after
+$P tools/snapdiff.py --issue m4a-genres
 ```
 
 `snapdiff.py` sorts every difference into **fixed** (declared and changed),
@@ -598,7 +599,8 @@ output for the sample alone, into a scratch directory, rather than rebuilding
 the library:
 
 ```bash
-pipeline/write_tags.py --only baseline/m4a-genres/paths.txt --out /tmp/out/_all
+$P pipeline/write_tags.py --only baseline/m4a-genres/paths.txt \
+   --out /tmp/out/_all
 ```
 
 `baseline/` is gitignored: it lists real filenames, so it describes the library
