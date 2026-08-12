@@ -7,12 +7,30 @@
     "This exists for artists whose different spellings are genuinely the same",
     "performer. artist_names.py also derives aliases automatically from",
     "MusicBrainz artist MBIDs, which is the preferred route -- this file is for",
-    "what MusicBrainz does not cover, or disagrees with."
+    "what MusicBrainz does not cover, or disagrees with.",
+    "",
+    "MusicBrainz covers almost no Balkan artist: their recordings carry no",
+    "artist MBID here, so the automatic route cannot merge their spellings and",
+    "the pin below is the only thing that will.",
+    "",
+    "A pin also decides the direction when MusicBrainz disagrees. MusicBrainz",
+    "renamed Colson Baker to 'mgk'; 'Machine Gun Kelly' is pinned because that",
+    "is the name to show. Matching ignores case and diacritics but not a dot,",
+    "so 'Mr.Black' and 'Mr. Black' each need their own line."
   ],
   "aliases": {
     "Joško Čagalj Jole": "Jole",
     "Josko Cagalj Jole": "Jole",
     "Relja Popović": "Relja",
-    "Relja Popovic": "Relja"
+    "Relja Popovic": "Relja",
+
+    "mgk": "Machine Gun Kelly",
+
+    "Marko Perković Thompson": "Thompson",
+    "Marko Perkovic Thompson": "Thompson",
+
+    "Mr.Black Balkan": "Mr. Black",
+    "Mr Black Balkan": "Mr. Black",
+    "Mr.Black": "Mr. Black"
   }
 }
