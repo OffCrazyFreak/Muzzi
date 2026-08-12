@@ -581,10 +581,15 @@ tools/snapdiff.py --issue m4a-genres
 
 `snapdiff.py` sorts every difference into **fixed** (declared and changed),
 **missed** (declared and unchanged, so the fix did nothing), **collateral**
-(changed and never declared) and **vanished** (no longer written at all). It
-exits non-zero on anything but fixed. Declaring the targets first is what makes
-the last three possible: without an intent to compare against, a diff can only
-say what moved, not whether it should have.
+(changed and never declared) and **vanished** or **appeared** (no longer
+written at all, or written now and not before). It exits non-zero on missed,
+on collateral, and on an undeclared appearance or disappearance. Declaring a
+track that a fix is meant to drop marks the removal intended, so a dedupe fix
+does not report its own success as a regression.
+
+Declaring the targets first is what makes any of this possible: without an
+intent to compare against, a diff can only say what moved, not whether it
+should have.
 
 `--level cache` (the default) reads the stage caches and takes seconds.
 `--level out` reads what actually landed in `out/_all`: filenames, tags, the
