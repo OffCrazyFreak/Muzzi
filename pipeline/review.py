@@ -419,19 +419,26 @@ def _rows_from(queue_path, rows):
     return out
 
 
-def _ods(path, title, note, items, with_proposal=True):
-    """Write one spreadsheet. Falls back to .tsv if odfpy is missing."""
-    cols = ["rank", "confidence", "tier", "file", "proposed_artist",
-            "proposed_title", "proposed_album", "proposed_year", "why",
-            "audio_flags", "hint"]
+def _ods(path, title, note, items, with_proposal=True, cols=None, cells=None):
+    """Write one spreadsheet. Falls back to .tsv if odfpy is missing.
 
-    def cells(r, i):
-        return [i, r["confidence"], r["tier"], r["file"],
-                (r["proposed_artist"] or "") if with_proposal else "",
-                (r["proposed_title"] or "") if with_proposal else "",
-                (r["proposed_album"] or "") if with_proposal else "",
-                (r["proposed_year"] or "") if with_proposal else "",
-                "; ".join(r["reasons"]), "; ".join(r["flags"]), r["hint"]]
+    cols/cells override the identity-queue layout, so another stage can publish
+    a sheet of its own without a second copy of this writer. yt_links.py uses
+    that to ask about links.
+    """
+    if cols is None:
+        cols = ["rank", "confidence", "tier", "file", "proposed_artist",
+                "proposed_title", "proposed_album", "proposed_year", "why",
+                "audio_flags", "hint"]
+
+    if cells is None:
+        def cells(r, i):
+            return [i, r["confidence"], r["tier"], r["file"],
+                    (r["proposed_artist"] or "") if with_proposal else "",
+                    (r["proposed_title"] or "") if with_proposal else "",
+                    (r["proposed_album"] or "") if with_proposal else "",
+                    (r["proposed_year"] or "") if with_proposal else "",
+                    "; ".join(r["reasons"]), "; ".join(r["flags"]), r["hint"]]
     try:
         from odf.opendocument import OpenDocumentSpreadsheet
         from odf.table import Table, TableRow, TableCell
@@ -939,6 +946,12 @@ def main():
             "proposed_title": m.get("title"),
             "proposed_album": rel.get("album"),
             "proposed_year": rel.get("year"),
+            # Where the identity came from. write_tags stamps it as
+            # MUZZI_SOURCE; without it here that stamp fell back to the
+            # literal "acoustid" on every file, which made the value a lie and
+            # left the "Needs identification" playlist permanently empty
+            # because nothing could ever be "audio-only".
+            "source": m.get("source"),
             "recording_id": m.get("recording_id"),
             "release_group_id": rel.get("release_group_id"),
             "bpm": a.get("bpm"),

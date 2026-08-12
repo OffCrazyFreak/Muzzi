@@ -153,6 +153,8 @@ def main():
             "bpm_verdict": tags.get("x:BPM_VERDICT"),
             "key_agreement": tags.get("x:KEY_AGREEMENT"),
             "quality": tags.get("x:QUALITY"),
+            "youtube": tags.get("x:YOUTUBE_ID"),
+            "youtube_trust": tags.get("x:YOUTUBE_TRUST"),
         })
 
         if not ver:
@@ -205,6 +207,10 @@ def main():
         ka = tags.get("x:KEY_AGREEMENT")
         if ka and ka.startswith("1/"):
             counts["key_uncertain"] += 1
+        if tags.get("x:YOUTUBE_ID"):
+            counts["yt_" + (tags.get("x:YOUTUBE_TRUST") or "unknown")] += 1
+        else:
+            counts["no_youtube"] += 1
         rows.append(rec)
 
     n = len(rows)
@@ -214,6 +220,12 @@ def main():
               "unprocessed", "unreadable"):
         if counts.get(k):
             print(f"    {k:16} {counts[k]:5}  ({100*counts[k]/n:.0f}%)")
+    print("\n  YOUTUBE LINKS")
+    for k, label in (("yt_origin", "origin (where the audio came from)"),
+                     ("yt_reference", "reference (a video of the song)"),
+                     ("no_youtube", "no link known")):
+        if counts.get(k):
+            print(f"    {label:34} {counts[k]:5}  ({100*counts[k]/n:.0f}%)")
     print("\n  NEEDS ATTENTION")
     for k, label in (("bpm_disagree", "BPM engines disagreed"),
                      ("bpm_ambiguous", "BPM half-or-double"),

@@ -218,6 +218,11 @@ def main():
         if txxx("MUZZI_SOURCE") == "audio-only" and "Unknown" in groups:
             crates["Needs identification"].append(fn)
 
+        # Where the audio came from is known, so a player that can follow the
+        # link has something to follow.
+        if txxx("YOUTUBE_ID"):
+            crates["Has YouTube link"].append(fn)
+
         try:
             d = float(txxx("DANCEABILITY") or 0)
             if d >= 1.2 and "Mood" in groups:
