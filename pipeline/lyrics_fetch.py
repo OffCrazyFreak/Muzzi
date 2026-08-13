@@ -286,6 +286,45 @@ def _good(entry):
             and bool(entry.get("synced")))
 
 
+def _from_other_sources(artist, title, duration):
+    """-> a candidate from the non-LRCLIB sources, gated the same way.
+
+    Order is by what the answer is worth: timed lyrics that fit the file
+    first, then any timed lyrics, then plain words. Untimed words beat timed
+    words belonging to a different song, which is the whole reason this comes
+    after LRCLIB rather than instead of it.
+    """
+    from pipeline import lyric_sources
+    got = lyric_sources.from_ytmusic(artist, title, duration)
+    if got and got.get("synced"):
+        # Its timings were written for ITS copy of the song. A file that is
+        # a different length carries a different edit, so keep the words and
+        # drop the timings rather than ship subtitles that drift.
+        md, dur = got.get("matched_duration"), duration
+        if md and dur and abs(md - dur) > lyric_sources.MAX_DRIFT:
+            got["synced"] = None
+            got["timing_dropped"] = f"{abs(md - dur):.0f}s from this file"
+    if got and (got.get("synced") or got.get("plain")):
+        return got
+    token = _genius_token()
+    if token:
+        return lyric_sources.from_genius(artist, title, token)
+    return None
+
+
+def _genius_token():
+    """The key beets already takes inline, read once."""
+    if not hasattr(_genius_token, "value"):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        try:
+            import json as _json
+            with open(os.path.join(root, "config", "secrets.json")) as fh:
+                _genius_token.value = _json.load(fh).get("genius_access_token")
+        except Exception:
+            _genius_token.value = None
+    return _genius_token.value
+
+
 def fetch(artist, title, cache, session, album=None, duration=None):
     """-> {"synced": str|None, "plain": str|None, "status": "ok"|"absent"}.
 
@@ -361,6 +400,7 @@ def fetch(artist, title, cache, session, album=None, duration=None):
 
     saw_answer = False
     best = None
+    near = None
     for path, params in attempts:
         status, payload = _get(session, path, params)
         if status == "error":
@@ -383,8 +423,40 @@ def fetch(artist, title, cache, session, album=None, duration=None):
             best = hit
             if hit.get("syncedLyrics"):
                 break                     # the right song, synced: done
-        elif best is None:
-            best = hit
+        elif right_artist and best is None:
+            # The right artist, some other song of theirs. Kept only as a
+            # last resort and marked, because it is the shape that put
+            # "Kajem Se" on "Porok": LRCLIB has no Porok at all, the broad
+            # q= query answered with another Katarina Zivkovic song, and it
+            # was stored as though it were the answer. write_tags refuses it
+            # at the gate, so keeping it buys nothing except a wrong-looking
+            # cache; it stays only so the audit can see what was offered.
+            near = hit
+
+    # LRCLIB had nothing for this song. Ask the other catalogues before
+    # recording an absence: LRCLIB is thin outside English, which is most of
+    # this library, and YouTube Music carries the same songs timed.
+    if best is None:
+        alt = _from_other_sources(artist, title, duration)
+        if alt:
+            alt.update({"status": "ok", "selector": SELECTOR,
+                        "artist_fit": fit(artist, alt["matched"].partition(" - ")[0])
+                        if artist else None,
+                        "title_fit": fit(title, alt["matched"].partition(" - ")[2])
+                        if title else None})
+            cache[key] = alt
+            return alt
+
+    if best is None and near is not None:
+        # Nothing matched this song. A blank field beats a wrong one, so the
+        # entry records what was offered and refuses it, instead of storing
+        # another song's words under this song's name.
+        na = near.get("artistName") or ""
+        nt = near.get("trackName") or ""
+        cache[key] = {"synced": None, "plain": None, "status": "absent",
+                      "selector": SELECTOR, "why": "only a different song",
+                      "nearest": f"{na} - {nt}"}
+        return cache[key]
 
     if best:
         ma = best.get("artistName") or ""
