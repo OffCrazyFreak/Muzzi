@@ -124,6 +124,23 @@ def cache_snapshot(tracks, cache):
         for name, table in others.items():
             flatten(name.replace(".json", ""), table.get(p) or {}, rec)
 
+        # cascade.json nests everything it learned inside `facts` and the
+        # source of each inside `sources`, so a one-level flatten turns twenty
+        # separate fields into one hash. Every difference then reads as
+        # "cascade.facts changed" and a diff cannot say which fact moved, or
+        # name one in targets.txt. Both are flattened a level deeper for that
+        # reason, under their own prefixes so they cannot collide with the
+        # entry's own keys.
+        casc = (others.get("cascade.json") or {}).get(p) or {}
+        flatten("cascade.fact", casc.get("facts") or {}, rec)
+        flatten("cascade.src", casc.get("sources") or {}, rec)
+        # The whole-dict hashes are dropped once their contents are here.
+        # Leaving both meant one changed fact was reported three times, as
+        # cascade.facts, cascade.sources and the field itself, which inflates
+        # a collateral count into something nobody can reconcile.
+        rec.pop("cascade.facts", None)
+        rec.pop("cascade.sources", None)
+
         # Which lyric sheet this track gets is decided by its identity, so a
         # change of artist or title silently changes the lyrics too. Look it
         # up the way write_tags.py does, and record the key alongside the

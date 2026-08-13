@@ -76,6 +76,13 @@ TRUST = {"musicbrainz": 3, "coverartarchive": 3,
 MB_RETRY = {429, 500, 502, 503, 504}
 MB_TRIES = 4
 
+# How closely a candidate's album has to match the one we already hold before
+# its artwork is believed to be this record's sleeve. The same 0.6 bar
+# r_deezer_search already applies to artist and title, rather than a second
+# number chosen separately: an album name is compared the same way a title is,
+# and two thresholds for one kind of comparison drift apart.
+MIN_ALBUM_FIT = 0.6
+
 _YEAR = re.compile(r"(\d{4})")
 _ISRC = re.compile(r"^[A-Z]{2}[A-Z0-9]{3}\d{7}$")
 
@@ -249,6 +256,46 @@ def r_deezer_by_isrc(fx, ctx):
             return
 
 
+def put_cover(fx, album_title, cover_url, source):
+    """Write artwork only when it belongs to the album this track carries.
+
+    Artwork and the album name used to be written by adjacent lines that
+    behaved differently for no stated reason. `album` loses to the seed and to
+    MusicBrainz, which both outrank Deezer in TRUST; `cover_url` had no
+    competing source at all, so it was written unconditionally. The track then
+    carried one album's name and a different album's sleeve, and nothing
+    anywhere compared them.
+
+    It goes wrong exactly where the catalogue is thinnest. Deezer substitutes a
+    compilation for an artist whose real albums it does not carry, every song
+    by that artist matches into it, and every song inherits that compilation's
+    cover: four Toše Proeski tracks with three different album tags all took
+    the sleeve of a 36-track collection. Across the library, 23% of Balkan
+    tracks with art shared an image with a track whose album tag differed,
+    against 15% of the rest, and every one of them arrived through a
+    text-matched streaming source. Cover Art Archive, which is keyed to a
+    release MBID, produced none.
+
+    Refusing here is not the same as going without. `cover_url` left unset is
+    what makes the cover-art resolver eligible, since it only fires while its
+    output is still missing, so declining a mismatched sleeve is what lets the
+    authoritative source answer instead. On a 182-track sample, 47 of the 51
+    refusals carried a release-group MBID for it to use.
+
+    One function rather than one check per call site: the album resolver and
+    the track resolver both write artwork, and a gate on only one of them
+    measured as changing nothing at all.
+    """
+    if not cover_url:
+        return False
+    ours = fx.get("album")
+    if not ours or fit(ours, album_title) >= MIN_ALBUM_FIT:
+        return fx.put("cover_url", cover_url, source)
+    fx.log.append(f"refused {source} cover: it belongs to "
+                  f"'{album_title}', ours is '{ours}'")
+    return False
+
+
 def r_deezer_search(fx, ctx):
     """artist+title -> Deezer track id, when no ISRC exists to be exact with."""
     ctx["lims"]["deezer"].wait()
@@ -316,7 +363,8 @@ def _absorb_deezer_track(fx, d):
     if alb.get("id"):
         fx.put("deezer_album_id", alb["id"], "deezer")
     fx.put("album", alb.get("title"), "deezer")
-    fx.put("cover_url", alb.get("cover_xl"), "deezer")
+
+    put_cover(fx, alb.get("title"), alb.get("cover_xl"), "deezer")
     return True
 
 
@@ -335,7 +383,7 @@ def r_deezer_album(fx, ctx):
     fx.put("label", d.get("label"), "deezer")
     fx.put("year", year_of(d.get("release_date")), "deezer")
     fx.put("total_tracks", d.get("nb_tracks"), "deezer")
-    fx.put("cover_url", d.get("cover_xl"), "deezer")
+    put_cover(fx, d.get("title"), d.get("cover_xl"), "deezer")
     genres = [g.get("name") for g in ((d.get("genres") or {}).get("data") or [])
               if g.get("name")]
     if genres:
@@ -495,12 +543,36 @@ def main():
     ap.add_argument("--max-rounds", type=int, default=5)
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--workers", type=int)
+    ap.add_argument("--only", metavar="PATHS",
+                    help="a file of source paths, one per line: enrich only "
+                         "these. For verifying a change against a frozen "
+                         "sample, the way write_tags.py --only is used")
     args = ap.parse_args()
 
     tiers = {t.strip() for t in args.tiers.split(",") if t.strip()}
     rows = [r for r in json.load(open(REVIEW)) if r["tier"] in tiers]
-    cache = {} if args.force else (json.load(open(OUT)) if os.path.exists(OUT) else {})
-    todo = [r for r in rows if _stale(cache.get(r["path"]), r)]
+    on_disk = json.load(open(OUT)) if os.path.exists(OUT) else {}
+    # --force starts empty so that entries for tracks no longer in review.json
+    # are dropped rather than kept forever. With --only that would throw away
+    # every track the run was told NOT to look at, because the cache is
+    # rewritten whole at the end: a 182-track verification would leave 182
+    # entries where 1827 had been. So --only keeps what it is not rebuilding.
+    cache = on_disk if (args.only or not args.force) else {}
+    todo = [r for r in rows
+            if args.force or _stale(on_disk.get(r["path"]), r)]
+    if args.only:
+        with open(args.only, encoding="utf-8") as fh:
+            want = {ln.strip() for ln in fh if ln.strip()
+                    and not ln.startswith("#")}
+        # Named rather than silently ignored: a --only list whose paths match
+        # nothing looks exactly like a run with nothing left to do, and the
+        # difference is a verification that measured an empty set.
+        missing = want - {r["path"] for r in rows}
+        if missing:
+            print(f"  {len(missing)} of {len(want)} paths are not in "
+                  f"review.json and will not be enriched, e.g. "
+                  f"{sorted(missing)[0]}")
+        todo = [r for r in todo if r["path"] in want]
     if args.limit:
         todo = todo[: args.limit]
     if not todo:

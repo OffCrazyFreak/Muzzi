@@ -531,6 +531,35 @@ five lookups -- including mainstream tracks whose videos certainly exist --
 returned no YouTube entity at all. MusicBrainz `url-rels` is the source that
 does work: on a 24-recording sample, 3 carried a `free streaming` YouTube link.
 
+**Artwork has to belong to the album the file is tagged with.** A cover and an
+album name used to be written by adjacent lines that behaved differently:
+`album` loses to the seed and to MusicBrainz, which both outrank Deezer, while
+`cover_url` had no competing source and was written unconditionally. The track
+then carried one record's name and another record's sleeve, and nothing
+compared them.
+
+It goes wrong where the catalogue is thinnest. Deezer substitutes a
+compilation for an artist whose real albums it does not carry, so every song by
+that artist matches into it and inherits its cover: four Toše Proeski tracks
+with three different album tags all took the sleeve of a 36-track collection.
+Across the library 23% of Balkan tracks with art shared an image with a track
+whose album differed, against 15% of the rest, and every one arrived through a
+text-matched streaming source. Cover Art Archive, keyed to a release MBID,
+produced none.
+
+Refusing a mismatched sleeve is not the same as going without it. `cover_url`
+left unset is exactly what makes the Cover Art Archive resolver eligible, since
+a resolver only fires while its output is still missing, so Deezer answering
+first was what kept the authoritative source from ever being asked. On a
+182-track sample the refusal moved 45 covers from Deezer to Cover Art Archive
+and took cross-album sharing from 11 to 0, at a cost of 6 to 14 tracks that now
+have no embedded art at all and are left to `art_missing`.
+
+The same rule reaches the fallback search in `enrich`, which took result number
+one with no comparison at all: the query issued for `CVIJA X TEODORA - NOKAUT`
+read the artist as `Lyrics Video`, and its first hit was embedded and shared
+with an unrelated Rasta track.
+
 **Cover art is square, 600x600 JPEG.** Players crop or stretch anything else.
 YouTube thumbnails are 16:9, so they are centre-cropped, and anything under
 400px is discarded -- YouTube answers a missing `maxresdefault` with a grey
