@@ -339,6 +339,59 @@ def _trim_of(path):
         return None
 
 
+# What a container says about itself, which -map_metadata 0 promotes into the
+# output's tags. The first three are the MP4/DASH brand box; the rest are FLV
+# onMetaData, carried by files that were downloaded as video. None of them
+# describes the music, and "width: 320" on an audio file is a wrong field, not
+# a spare one. The encoder fields ffmpeg adds (TSSE, TDEN, TENC) are left
+# alone: those are true statements about the copy we just made.
+_CONTAINER_FIELDS = {
+    "major_brand", "minor_version", "compatible_brands",
+    "width", "height", "framerate", "videodatarate", "audiodatarate",
+    "totaldatarate", "duration", "totalduration", "starttime", "bytelength",
+    "canseekontime", "sourcedata",
+}
+
+
+def _clean_remuxed_tags(path):
+    """Undo what the container, rather than the music, contributed.
+
+    ffmpeg also rewrites an ID3 comment as TXXX:comment, which loses it: the
+    rest of this file reads COMM, and a source comment holding a YouTube URL
+    is the only reason 124 files link to their video. Fold it back.
+    """
+    try:
+        f = mutagen.File(path)
+        t = f.tags if f else None
+        if t is None:
+            return
+        if hasattr(t, "getall"):
+            for fr in list(t.getall("TXXX")):
+                if (fr.desc or "").lower() in _CONTAINER_FIELDS:
+                    t.delall(f"TXXX:{fr.desc}")
+            promoted = [fr for fr in t.getall("TXXX")
+                        if (fr.desc or "").lower() == "comment"]
+            if promoted and not t.getall("COMM"):
+                text = _text_of(promoted[0].text)
+                if text:
+                    t.add(COMM(encoding=3, lang="eng", desc="", text=[text]))
+            for fr in promoted:
+                t.delall(f"TXXX:{fr.desc}")
+        else:
+            for k in [k for k in t.keys()
+                      if k.split(":")[-1].lower() in _CONTAINER_FIELDS]:
+                t.pop(k, None)
+        f.save()
+    except Exception:
+        # A tag we could not clean is cosmetic; a track we failed to write is
+        # not. The copy itself is already on disk and correct.
+        pass
+
+
+def _text_of(value):
+    return str(value[0]) if isinstance(value, list) and value else str(value or "")
+
+
 def copy_audio(src, dst, cut):
     """Put a copy of `src` at `dst`, minus `cut` seconds off the front.
 
@@ -367,6 +420,7 @@ def copy_audio(src, dst, cut):
              "-map_metadata", "0", "-y", tmp],
             capture_output=True, text=True, timeout=180)
         if p.returncode == 0 and os.path.getsize(tmp) > 0:
+            _clean_remuxed_tags(tmp)
             shutil.move(tmp, dst)
             shutil.copystat(src, dst)
             return cut
