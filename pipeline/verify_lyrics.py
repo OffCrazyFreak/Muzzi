@@ -22,6 +22,7 @@ detection on a short title cannot.
 Usage: verify_lyrics.py [--limit N] [--model small] [--control]
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -48,6 +49,34 @@ LRCLIB = "https://lrclib.net/api/search"
 
 
 _LRC_TS = re.compile(r"\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]")
+
+
+def _digest(text):
+    """-> a short stable fingerprint of the sheet a score was computed from.
+
+    Stored beside the score so a later run can tell whether it is still
+    judging the same words. Without it this cache was keyed on the path
+    alone, so when lyrics_fetch swapped in a different sheet the old score
+    stayed and read as a verification of words we no longer held.
+    """
+    text = (text or "").strip()
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16] if text else ""
+
+
+def _stale(rec, current):
+    """-> True when this entry was scored against different words.
+
+    Entries written before the digest existed carry no record of what they
+    judged, so they fall back to the coarsest comparison that is still
+    honest: whether there were words at all. Treating every legacy entry as
+    stale would spend hours of Whisper re-deriving answers that are mostly
+    still correct, and the cases that actually changed are exactly the ones
+    where presence changed.
+    """
+    stored = rec.get("lyric_digest")
+    if stored is not None:
+        return stored != _digest(current)
+    return bool(rec.get("have_lyrics")) != bool(current)
 
 
 def _strip_lrc(text):
@@ -216,10 +245,25 @@ def main():
             if v.get("path") and v.get("decoded_secs"):
                 durations[v["path"]] = float(v["decoded_secs"])
 
-    todo = [r for r in cands if r["path"] not in done or args.control]
-    results = [done[r["path"]] for r in cands
-               if r["path"] in done and not args.control]
-    print(f"  {len(todo)} to verify ({len(results)} cached)")
+    # Read the sheet we hold now, from the cache rather than the network, so
+    # deciding what to re-score costs nothing.
+    def held(r):
+        e = lyric_cache.get(f'{r["proposed_artist"]}|{r["proposed_title"]}'.lower())
+        if isinstance(e, dict):
+            return e.get("plain") or _strip_lrc(e.get("synced"))
+        return e if isinstance(e, str) else None
+
+    def redo(r):
+        return (r["path"] not in done or args.control
+                or _stale(done[r["path"]], held(r)))
+
+    todo = [r for r in cands if redo(r)]
+    results = [done[r["path"]] for r in cands if not redo(r)]
+    changed = sum(1 for r in cands
+                  if r["path"] in done and not args.control
+                  and _stale(done[r["path"]], held(r)))
+    print(f"  {len(todo)} to verify ({len(results)} cached, "
+          f"{changed} of them re-scored because the sheet changed)")
 
     # Phase 1: reference lyrics. Network-bound and globally rate-limited inside
     # lyrics_fetch, so threads only hide latency, they do not raise the rate.
@@ -238,7 +282,10 @@ def main():
             rec = {"file": r["file"], "path": r["path"],
                    "confidence": r["confidence"], "tier": r["tier"],
                    "proposed": f'{r["proposed_artist"]} - {r["proposed_title"]}',
-                   "have_lyrics": bool(lyrics)}
+                   "have_lyrics": bool(lyrics),
+                   # What was actually scored, recorded at the moment it is
+                   # scored rather than looked up again later.
+                   "lyric_digest": _digest(lyrics)}
             if lyrics:
                 texts[r["path"]] = lyrics
                 need.append(rec)

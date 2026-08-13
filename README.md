@@ -242,7 +242,7 @@ can't be wrong about which file it's describing:
 | `analyze` | BPM (three engines), musical key -> Camelot, loudness and true peak (ffmpeg EBU R128), danceability, spectral cutoff |
 | `dedupe` | files whose fingerprints match: the same recording twice |
 | `silence` | how much dead air each file opens with, and whether it is safe to cut. Measures the *source*, so the figure never changes and trimming can never happen twice |
-| `verify_lyrics` | Whisper transcribes the audio and compares it to the fetched lyrics -- independent proof the file is the song we think, plus language detection |
+| `verify_lyrics` | Whisper transcribes the audio and compares it to the fetched lyrics -- independent proof the file is the song we think, plus language detection. Each score records a digest of the sheet it judged, so a track whose lyrics later change is re-scored and one whose lyrics did not is still skipped |
 | `lyric_align` | how far each synced lyric sheet is out of step with its audio, by locating the opening lines in a word-timestamped transcript |
 
 **Enrichment** turns what we learned into new search keys:
