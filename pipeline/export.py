@@ -218,9 +218,11 @@ def main():
         if txxx("MUZZI_SOURCE") == "audio-only" and "Unknown" in groups:
             crates["Needs identification"].append(fn)
 
-        # Where the audio came from is known, so a player that can follow the
-        # link has something to follow.
-        if txxx("YOUTUBE_ID"):
+        # Gated like every other crate in this loop: --crates is a contract,
+        # and a crate that ignores it is written when the caller asked for it
+        # not to be. "Unknown" because this is provenance, like the crate
+        # above it, rather than a musical property.
+        if txxx("YOUTUBE_ID") and "Unknown" in groups:
             crates["Has YouTube link"].append(fn)
 
         try:

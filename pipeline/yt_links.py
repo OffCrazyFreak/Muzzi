@@ -253,7 +253,10 @@ def propagate(cand, groups):
 def mb_youtube(recording_id, session, limiter, cache):
     """-> a video id from this recording's url relations, or None."""
     key = "mb:" + recording_id
-    if key in cache:
+    # A cached FAILURE is not an answer. AGENTS.md forbids caching a failed
+    # request as a real one, and testing only for the key made one timeout or
+    # one 503 into "this recording has no video", permanently, until --force.
+    if key in cache and not cache[key].get("error"):
         return cache[key].get("video_id")
     vid = None
     try:
@@ -268,6 +271,7 @@ def mb_youtube(recording_id, session, limiter, cache):
                 if vid:
                     break
     except Exception as e:
+        # Recorded so a later run can say why, but not treated as an answer.
         cache[key] = {"video_id": None, "error": str(e)[:80]}
         return None
     cache[key] = {"video_id": vid}
@@ -277,7 +281,8 @@ def mb_youtube(recording_id, session, limiter, cache):
 def yt_search(artist, title, limiter, cache):
     """-> {video_id, duration, title} for the best-fitting hit, or None."""
     key = f"search:{(artist or '').lower()}|{(title or '').lower()}"
-    if key in cache:
+    # Same rule as mb_youtube: a lookup that failed is retried, not believed.
+    if key in cache and not cache[key].get("error"):
         return cache[key].get("hit")
     hits, err = src_ytmusic(artist or "", title or "", limiter)
     best = None
@@ -436,10 +441,14 @@ def main():
             if i % 25 == 0 or i == len(todo):
                 print(f"    {i}/{len(todo)}  {sum(1 for c in cand.values() if c)} "
                       f"files with a candidate", flush=True)
-                if args.apply:
-                    json.dump(lookup, open(LOOKUP + ".tmp", "w"),
-                              ensure_ascii=False, indent=1)
-                    os.replace(LOOKUP + ".tmp", LOOKUP)
+                # Written with or without --apply. The lookups happen either
+                # way, MusicBrainz at one request per second, and throwing the
+                # answers away made a report run cost the same as a real one
+                # every time. This file is a cache of questions already asked;
+                # it changes no output.
+                json.dump(lookup, open(LOOKUP + ".tmp", "w"),
+                          ensure_ascii=False, indent=1)
+                os.replace(LOOKUP + ".tmp", LOOKUP)
 
     out, sheet, stats, why = {}, [], Counter(), Counter()
     for r in rows:
@@ -471,6 +480,9 @@ def main():
         print(f"    {src[:34]:34} {n:5}")
 
     if not args.apply:
+        json.dump(lookup, open(LOOKUP + ".tmp", "w"),
+                  ensure_ascii=False, indent=1)
+        os.replace(LOOKUP + ".tmp", LOOKUP)
         print(f"\n  {len(out)} links resolved. Re-run with --apply.\n")
         return 0
 

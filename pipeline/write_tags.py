@@ -552,6 +552,12 @@ def write_generic(dst, fields, art_path, lyrics):
                 f.pop(m[k], None)
                 continue
             f[m[k]] = [int(v)] if k == "bpm" else [str(v)]
+        # Earlier builds had no "comment" in the map, so the freeform loop
+        # below wrote ----:com.apple.iTunes:COMMENT. That loop now skips
+        # "comment", and it only pops an atom whose key is in `fields`, so the
+        # stale one would survive every later build and the file would carry
+        # two comment fields free to disagree.
+        f.pop("----:com.apple.iTunes:COMMENT", None)
         for k, v in fields.items():
             if k in m:
                 continue

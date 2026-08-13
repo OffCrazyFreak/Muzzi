@@ -515,9 +515,35 @@ def _ods(path, title, note, items, with_proposal=True, cols=None, cells=None):
     doc.save(path)
 
 
+def links_from_sheets():
+    """-> {filename: link} typed into the review sheets since the last run.
+
+    hints.tsv is the memory; the sheets are a view. A link answer only exists
+    in the sheet until something copies it across, and this stage deletes every
+    sheet a few lines below. review runs five times before yt_links does, so
+    without this the answer is wiped in the same run it was given, and the user
+    sees a question they already answered come back.
+
+    Read from the "link" column specifically: sheet 4 asks for a URL, and a
+    bare "y" in a hint column means the artist and title are right, which is a
+    different question.
+    """
+    out = {}
+    if not os.path.isdir(REVIEW_DIR):
+        return out
+    for n in sorted(os.listdir(REVIEW_DIR)):
+        if n.lower().endswith(".ods"):
+            out.update(_hints_from_ods(os.path.join(REVIEW_DIR, n),
+                                       column="link"))
+    return {k: v for k, v in out.items() if v}
+
+
 def publish_sheets(groups, hints):
     """Rebuild the review folder from scratch, numbered in working order."""
-    save_hints(hints)
+    # Before the wipe, or the answer goes with the sheet.
+    links = load_links()
+    links.update(links_from_sheets())
+    save_hints(hints, links=links)
     os.makedirs(REVIEW_DIR, exist_ok=True)
     # Wipe first. A sheet that is not regenerated is a sheet with nothing left
     # to answer, and leaving it on disk is what made it impossible to tell
