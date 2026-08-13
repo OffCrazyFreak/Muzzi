@@ -97,6 +97,22 @@ def _session():
     return requests.Session()
 
 
+def as_object(response):
+    """-> the response's JSON when it is an object, else None.
+
+    Every probe below reads named fields out of the answer, and `.get` on a
+    bare list or a string raises rather than returning nothing. A service that
+    answers 200 with JSON of the wrong shape has changed under us, which is a
+    verdict this module already has a word for, so it is worth saying that
+    rather than letting an AttributeError decide what happens.
+    """
+    try:
+        got = response.json()
+    except Exception:
+        return None
+    return got if isinstance(got, dict) else None
+
+
 def _lrclib(s):
     r = s.get("https://lrclib.net/api/search",
               params={"artist_name": PROBE_ARTIST, "track_name": PROBE_TITLE},
@@ -137,7 +153,10 @@ def _itunes(s):
         return evidence.RATE_LIMITED, "403, its usual throttle response"
     if r.status_code != 200:
         return DOWN, f"HTTP {r.status_code}"
-    if not (r.json().get("results") or []):
+    d = as_object(r)
+    if d is None:
+        return CHANGED, "answered with something that is not an object"
+    if not (d.get("results") or []):
         # iTunes answers a throttled request with 200 and zero results, which
         # is indistinguishable from a real miss on any one query. On this
         # query it is not: the track is certainly in the catalogue.
@@ -155,7 +174,10 @@ def _musicbrainz(s):
         return DOWN, "503, its 'currently busy' response"
     if r.status_code != 200:
         return DOWN, f"HTTP {r.status_code}"
-    if not (r.json().get("recordings") or []):
+    d = as_object(r)
+    if d is None:
+        return CHANGED, "answered with something that is not an object"
+    if not (d.get("recordings") or []):
         return CHANGED, "no hit for a recording it certainly has"
     return OK, "answered"
 
@@ -206,7 +228,7 @@ def _deezer_lyrics(s):
                    cookies={"arl": arl}, timeout=20)
         if r.status_code != 200:
             return DOWN, f"auth returned HTTP {r.status_code}"
-        jwt = (r.json() or {}).get("jwt")
+        jwt = (as_object(r) or {}).get("jwt")
     except Exception as e:
         return DOWN, f"auth {type(e).__name__}: {str(e)[:40]}"
     if not jwt:
@@ -230,9 +252,12 @@ def _deezer_lyrics(s):
                              "query": query}, timeout=20)
             if r.status_code != 200:
                 return DOWN, f"pipe returned HTTP {r.status_code}"
-            d = r.json()
+            d = as_object(r)
         except Exception as e:
             return DOWN, f"pipe {type(e).__name__}: {str(e)[:40]}"
+        if d is None:
+            return CHANGED, "the pipe answered with something that is not an "\
+                            "object"
         if d.get("errors"):
             # A GraphQL error on a fixed query means the schema moved under
             # us, which is the standing hazard of an unofficial endpoint. It
@@ -261,7 +286,10 @@ def _genius(s):
         return BAD_KEY, f"HTTP {r.status_code}, the token was rejected"
     if r.status_code != 200:
         return DOWN, f"HTTP {r.status_code}"
-    if not ((r.json().get("response") or {}).get("hits") or []):
+    d = as_object(r)
+    if d is None:
+        return CHANGED, "answered with something that is not an object"
+    if not ((d.get("response") or {}).get("hits") or []):
         return CHANGED, "no hit for a song it certainly has"
     return OK, "answered"
 
