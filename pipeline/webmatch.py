@@ -279,7 +279,22 @@ def _ytmusic_client():
         return _YT
 
 
+def _down(name):
+    """-> an error string when a source is not answering, else None.
+
+    Checked before spending a request rather than after. The saving is
+    incidental; the point is that a source known to be down produces an error
+    for every track in the run, so its absence is recorded consistently rather
+    than depending on whether each individual call happened to time out.
+    """
+    from pipeline import health
+    return health.blocked(name)
+
+
 def src_ytmusic(artist, title, lim):
+    err = _down("ytmusic")
+    if err:
+        return None, err
     lim.wait()
     try:
         res = _ytmusic_client().search((artist + " " + title).strip(),
@@ -300,6 +315,9 @@ def src_ytmusic(artist, title, lim):
 
 
 def src_deezer(artist, title, lim, session):
+    err = _down("deezer")
+    if err:
+        return None, err
     lim.wait()
     q = f'artist:"{artist}" track:"{title}"' if artist else title
     try:
@@ -317,6 +335,9 @@ def src_deezer(artist, title, lim, session):
 
 
 def src_itunes(artist, title, lim, session):
+    err = _down("itunes")
+    if err:
+        return None, err
     lim.wait()
     try:
         r = session.get("https://itunes.apple.com/search",
@@ -495,6 +516,20 @@ def match_one(artist, title, duration, ctx):
     else:
         grade = "C"
 
+    # Which of the three catalogues could have answered at all. A grade counts
+    # agreement, so it is only as meaningful as the number of sources that
+    # were reachable to agree: one confirmation out of one available source is
+    # not the evidence that one out of three is, and a source that was down is
+    # simply absent from `sources` where it would otherwise be a dissenter.
+    #
+    # This does not change the grade, deliberately. Raising confidence because
+    # fewer sources were asked is exactly backwards. It records the
+    # denominator so the grade can be re-earned later, and so review.py and
+    # anything downstream can tell a settled B from a B that never got a
+    # second opinion.
+    asked = [n for n in ("ytmusic", "deezer", "itunes") if n not in errors]
+    limited = grade != "A" and bool(errors)
+
     best = None
     for name in ("deezer", "itunes", "ytmusic"):   # album+cover first
         if name in hits:
@@ -521,11 +556,40 @@ def match_one(artist, title, duration, ctx):
         "wrong_version": dropped or None,
         "corroboration": corroboration,
         "errors": errors or None,
+        # The denominator, and whether this answer is settled or merely the
+        # best that could be reached at the time.
+        "asked": asked,
+        "limited_by_outage": limited or None,
         "queried": {"artist": artist, "title": title},
     }
 
 
 # ---------------------------------------------------------------- driver
+
+def to_retry(todo, cache):
+    """-> the cached tracks worth asking again, because a source was down.
+
+    A cached entry used to end the matter for good, so a track that got a B
+    while Deezer was refusing requests for ten minutes kept that B for ever.
+    The only way back was --force, which re-queries the entire library to fix
+    the handful of tracks that happened to be unlucky. An outage is not an
+    answer.
+
+    Only grades below A are worth re-asking: an A already has two catalogues
+    agreeing, and a third would not change it.
+
+    Entries written before `limited_by_outage` existed are judged the same way
+    from what they do carry. They already recorded which sources errored, so
+    the backlog of tracks capped by past outages is reachable too, rather than
+    the fix only applying to outages from here on.
+    """
+    def limited(e):
+        if e.get("limited_by_outage"):
+            return True
+        return bool(e.get("errors")) and e.get("grade") != "A"
+
+    return [t for t in todo if limited(cache.get(t["path"]) or {})]
+
 
 def targets(review, guess):
     """Every track whose name is still only as good as its filename."""
@@ -612,7 +676,11 @@ def main():
 
     todo = targets(review, guess)
     cache = {} if args.force else (json.load(open(OUT)) if os.path.exists(OUT) else {})
-    todo = [t for t in todo if t["path"] not in cache]
+    retry = to_retry(todo, cache)
+    todo = [t for t in todo if t["path"] not in cache] + retry
+    if retry:
+        print(f"  {len(retry)} tracks are being asked again: their grade was "
+              f"limited by a source that was down, not by the catalogues")
     if args.limit:
         todo = todo[: args.limit]
     if not todo:

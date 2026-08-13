@@ -94,6 +94,11 @@ def from_ytmusic(artist, title, duration=None):
     """
     if not (artist and title):
         return None
+    # A source that is down must not be allowed to look like a source with
+    # nothing. ERROR is never cached; None is cached for a month.
+    from pipeline import health
+    if health.blocked("ytmusic"):
+        return ERROR
     yt = _ytmusic()
     if yt is None:
         return ERROR if "failed" in _YT_STATE else None
@@ -147,6 +152,9 @@ def from_genius(artist, title, token=None, session=None):
     from pipeline.useragent import UA
     if not (token and artist and title):
         return None
+    from pipeline import health
+    if health.blocked("genius"):
+        return ERROR
     s = session or requests.Session()
     try:
         r = s.get("https://api.genius.com/search", params={"q": f"{artist} {title}"},

@@ -877,6 +877,47 @@ closed.
 
 ---
 
+## When a source is down
+
+A source that is down does not say so. It returns nothing, and nothing is
+exactly what a source with no entry for your song returns. Those are opposite
+facts wearing the same clothes: one may be written down and believed for a
+month, the other has to be retried within the hour.
+
+```bash
+./.venv/bin/python pipeline/health.py
+```
+
+Each source is asked one question whose answer is already known, once every
+ten minutes, shared across the eight stages of a run. The probe checks the
+**answer**, not the status code, because a status code proves nothing here:
+Deezer returns 200 with an error object in the body, iTunes returns 200 with
+zero results when it is throttling, and a captive portal returns 200 with a
+login page.
+
+Three things follow, and they are what the check is for:
+
+- **A dead source shrinks the denominator.** Two catalogues agreeing out of
+  two that were reachable is weaker evidence than two out of three, and if the
+  one that was down is simply missing from the list it reads as the stronger
+  case. `webmatch` records which sources it could ask, not only which
+  answered.
+- **Nothing a dead source failed to say is cached.** The lyric fetcher already
+  separated "LRCLIB had nothing" from "LRCLIB could not be reached"; now every
+  source does, and a source known to be down is not asked at all, so its
+  absence is recorded the same way for every track instead of depending on
+  which individual calls happened to time out.
+- **A conclusion reached during an outage is provisional.** A cached
+  `webmatch` entry used to settle the matter for good, so a track that scored
+  0.80 while Deezer was refusing requests for ten minutes kept that score for
+  ever, and the only way back was `--force` over the whole library. Those
+  entries are re-asked instead.
+
+A source nobody gave a key to is reported apart from one that is down: nothing
+is wrong with it and nothing will come back. A source nobody wrote a probe for
+keeps being asked, because it should be disabled by a decision and not by an
+omission.
+
 ## Why a track says what it says
 
 The stage caches hold conclusions: one artist, one album, one lyric sheet.
