@@ -561,7 +561,7 @@ def main():
     before_s = sum(1 for v in cache.values()
                    if isinstance(v, dict) and v.get("synced"))
     session = requests.Session()
-    gained, errors = 0, 0
+    gained, errors, resolved = 0, 0, 0
     t0 = time.time()
     for i, r in enumerate(rows, 1):
         key = f'{r["proposed_artist"]}|{r["proposed_title"]}'.lower()
@@ -572,8 +572,13 @@ def main():
                     duration=durations.get(r["path"]))
         if out.get("status") == "error":
             errors += 1
-        elif out.get("synced") and not had:
-            gained += 1
+        else:
+            # A definitive answer, "here are the words" or "nobody has any".
+            # Counted so the exit code can tell a sweep that mostly worked
+            # from a sweep that reached nothing at all.
+            resolved += 1
+            if out.get("synced") and not had:
+                gained += 1
         if i % 25 == 0 or i == len(rows):
             el = time.time() - t0
             print(f"  {i}/{len(rows)}  {el:.0f}s  +{gained} synced  "
@@ -588,7 +593,14 @@ def main():
                   if isinstance(v, dict) and v.get("synced"))
     print(f"\n  synced lyrics in cache: {before_s} -> {after_s} (+{after_s-before_s})")
     print(f"  unresolved errors (will retry next run): {errors}\n")
-    return 1 if errors else 0
+    # A sweep that resolved anything is a success, however many requests are
+    # pending retry: leaving those uncached so the next run asks again is
+    # this module's designed behaviour, not a fault. Only a sweep that
+    # reached nothing is worth failing on, because run.py stops a chain at
+    # the first non-zero exit and verify_lyrics and lyric_align sit behind
+    # this stage. Seven transient errors out of 1723 once skipped both, with
+    # the line above still reporting a finished sweep.
+    return 1 if errors and not resolved else 0
 
 
 if __name__ == "__main__":
