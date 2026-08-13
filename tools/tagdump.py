@@ -34,6 +34,12 @@ _MP4_TEXT = {
     "\xa9lyr": "lyrics",
 }
 
+# Track and disc are pairs of numbers here, not text, so they need their own
+# reader. They were missing from the map above, which meant a stale track
+# number on an m4a was invisible to every snapshot: the diff read clean while
+# the file still carried the position it had on somebody else's album.
+_MP4_PAIR = {"trkn": "track", "disk": "disc"}
+
 
 # Vorbis comment keys, as write_generic writes them, mapped onto the same
 # field names the other two containers produce. Anything not listed keeps its
@@ -151,6 +157,11 @@ def tags_of(path, hash_long=True):
             v = t.get(atom)
             if v:
                 out[name] = keep(_text(v))
+        for atom, name in _MP4_PAIR.items():
+            v = t.get(atom)
+            if v:
+                num, total = (list(v[0]) + [0, 0])[:2]
+                out[name] = f"{num}/{total}" if total else str(num)
         for k, v in t.items():
             if k.startswith("----:com.apple.iTunes:") and v:
                 _add(out, k.split(":")[-1], keep(_text(v[0])))

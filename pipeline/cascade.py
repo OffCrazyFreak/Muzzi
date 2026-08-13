@@ -432,6 +432,34 @@ RESOLVERS = [
 ]
 
 
+def seed_of(row):
+    """The identity a cached entry was grown from."""
+    return {"artist": row.get("proposed_artist"),
+            "title": row.get("proposed_title"),
+            "album": row.get("proposed_album"),
+            "year": row.get("proposed_year"),
+            "recording_id": row.get("recording_id"),
+            "release_group_id": row.get("release_group_id")}
+
+
+def _stale(entry, row):
+    """-> True when this row still needs enriching.
+
+    Answering a review row with a link can replace the song outright, and
+    everything the cascade resolved from the old identity (album, cover, ISRC,
+    label) then describes the song that was replaced. Keying the cache on the
+    path alone meant that entry was never revisited without --force.
+
+    An entry written before this stamp existed carries no "seed" and is left
+    alone: an upgrade should not silently re-query the whole library.
+    """
+    if entry is None:
+        return True
+    if "seed" not in entry:
+        return False
+    return entry["seed"] != seed_of(row)
+
+
 def run_track(seed, ctx, max_rounds):
     """Keep firing whatever is ready until a whole pass changes nothing."""
     fx = Facts(seed)
@@ -472,7 +500,7 @@ def main():
     tiers = {t.strip() for t in args.tiers.split(",") if t.strip()}
     rows = [r for r in json.load(open(REVIEW)) if r["tier"] in tiers]
     cache = {} if args.force else (json.load(open(OUT)) if os.path.exists(OUT) else {})
-    todo = [r for r in rows if r["path"] not in cache]
+    todo = [r for r in rows if _stale(cache.get(r["path"]), r)]
     if args.limit:
         todo = todo[: args.limit]
     if not todo:
@@ -493,11 +521,7 @@ def main():
     gained = Counter()
 
     def work(r):
-        seed = {"artist": r.get("proposed_artist"), "title": r.get("proposed_title"),
-                "album": r.get("proposed_album"), "year": r.get("proposed_year"),
-                "recording_id": r.get("recording_id"),
-                "release_group_id": r.get("release_group_id")}
-        fx = run_track(seed, ctx, args.max_rounds)
+        fx = run_track(seed_of(r), ctx, args.max_rounds)
         return r, fx
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -511,7 +535,11 @@ def main():
             with lock:
                 seen["n"] += 1
                 cache[r["path"]] = {"file": r["file"], "facts": fx.dump(),
-                                    "sources": fx.sources(), "trail": fx.log}
+                                    "sources": fx.sources(), "trail": fx.log,
+                                    # What these facts were grown from, so a
+                                    # later run can tell that the row now
+                                    # names a different song.
+                                    "seed": seed_of(r)}
                 for k, v in fx.sources().items():
                     if v != "seed":
                         gained[k] += 1

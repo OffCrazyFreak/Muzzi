@@ -104,6 +104,15 @@ def _is_rg_tag(name):
     return n.startswith(_RG_PREFIXES) or n in _RG_EXACT
 
 
+# A MusicBrainz identifier on a non-MP3 container, in any of the spellings
+# taggers use: "MusicBrainz Track Id", MUSICBRAINZ_TRACKID,
+# musicbrainz_releasetrackid. Nothing here writes one, so every one of them
+# came in on the source file and states which recording this is on evidence
+# we never saw.
+_MB_ATOM = re.compile(r"musicbrainz[ _]?(?:track|recording|release|album|"
+                      r"artist|work|releasegroup|releasetrack)", re.I)
+
+
 def rg_gain(loudness_lufs, true_peak=None, target=RG_TARGET_LUFS):
     """ReplayGain for one measured loudness, capped so it cannot clip.
 
@@ -573,8 +582,31 @@ def write_generic(dst, fields, art_path, lyrics):
         # stale one would survive every later build and the file would carry
         # two comment fields free to disagree.
         f.pop("----:com.apple.iTunes:COMMENT", None)
+        # A MusicBrainz ID we did not write is a claim about which recording
+        # this is, made by whoever tagged the source. The MP3 path deletes its
+        # UFID frame before writing; nothing here writes these atoms at all,
+        # so without this a source's ID outlived every correction, including a
+        # hint that replaced the song outright.
+        for k in [k for k in f.keys() if _MB_ATOM.search(k)]:
+            f.pop(k, None)
+        # The track number goes in the native atom, which is what players and
+        # tools/tagdump.py read. The freeform loop below would have written
+        # ----:com.apple.iTunes:TRACKNUMBER, which almost nothing reads, and
+        # left an inherited trkn beside it free to disagree. The MP3 path
+        # writes TRCK and deletes it when unknown; this is the same rule.
+        # disk always goes: nothing here knows a disc number, so any that is
+        # here came in with the file.
+        f.pop("disk", None)
+        f.pop("trkn", None)
+        f.pop("----:com.apple.iTunes:TRACKNUMBER", None)
+        if fields.get("tracknumber"):
+            try:
+                f["trkn"] = [(int(fields["tracknumber"]),
+                              int(fields.get("total_tracks") or 0))]
+            except (TypeError, ValueError):
+                pass
         for k, v in fields.items():
-            if k in m:
+            if k in m or k in ("tracknumber", "total_tracks"):
                 continue
             atom = f"----:com.apple.iTunes:{k.upper()}"
             if v in (None, ""):
@@ -602,6 +634,10 @@ def write_generic(dst, fields, art_path, lyrics):
                 f.pop(key, None)
             else:
                 f[key] = str(v)
+        # Same reason as the MP4 branch: an ID nothing here writes is a claim
+        # about which recording this is that we cannot stand behind.
+        for k in [k for k in f.keys() if _MB_ATOM.search(k)]:
+            f.pop(k, None)
         if lyrics:
             f["LYRICS"] = lyrics
         if art_path and os.path.exists(art_path) and isinstance(f, FLAC):
@@ -666,6 +702,10 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
             "isrc": (ident or {}).get("isrc"),
             "label": (ident or {}).get("label"),
             "tracknumber": (ident or {}).get("track_number"),
+            # Only ever read together with the one above, to fill the native
+            # trkn atom's second slot. The MP3 path writes the same pair into
+            # TRCK as "4/12".
+            "total_tracks": (ident or {}).get("total_tracks"),
             "album": (ident or {}).get("album"),
             "date": (ident or {}).get("year"),
             "genre": primary,
@@ -752,34 +792,56 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
         # Machine-readable list for players that understand it.
         txxx("ARTISTS", "\u0000".join(ident["all_artists"])
              if len(ident["all_artists"]) > 1 else None)
+        # Every identity frame below is written when we know the fact and
+        # DELETED when we do not. Skipping instead of deleting left the
+        # source's own album, year or MusicBrainz ID in place, and a hint that
+        # changed the song could not take them back out, which is how a file
+        # ended up carrying one song's name and another song's recording ID.
         if ident.get("album"):
             t.setall("TALB", [TALB(encoding=3, text=[ident["album"]])])
             # Album artist is the lead only, so albums group correctly.
             t.setall("TPE2", [TPE2(encoding=3, text=[ident["lead_artist"]])])
+        else:
+            # TPE2 is deliberately left alone: it is how players group, it is
+            # the lead artist we write to TPE1 anyway, and it is not one of
+            # the facts a rejected match hands down.
+            t.delall("TALB")
         if ident.get("year"):
             t.setall("TDRC", [TDRC(encoding=3, text=[str(ident["year"])])])
+        else:
+            t.delall("TDRC")
+        t.delall("UFID:http://musicbrainz.org")
         if ident.get("recording_id"):
-            t.delall("UFID:http://musicbrainz.org")
             t.add(UFID(owner="http://musicbrainz.org",
                        data=str(ident["recording_id"]).encode()))
         # Remix credit belongs in TPE4 ("interpreted/remixed by"), which is the
         # standard frame players understand, not buried in the title.
         if ident.get("remixer"):
             t.setall("TPE4", [TPE4(encoding=3, text=[ident["remixer"]])])
+        else:
+            t.delall("TPE4")
         # Facts the cascade resolved. ISRC is the useful one: it identifies
         # this exact recording worldwide, so a future run can ask any service
         # an exact question instead of guessing from a name.
         if ident.get("isrc"):
             t.setall("TSRC", [TSRC(encoding=3, text=[ident["isrc"]])])
+        else:
+            t.delall("TSRC")
         if ident.get("label"):
             t.setall("TPUB", [TPUB(encoding=3, text=[ident["label"]])])
+        else:
+            t.delall("TPUB")
         if ident.get("track_number"):
             total = ident.get("total_tracks")
             t.setall("TRCK", [TRCK(encoding=3, text=[
                 f'{ident["track_number"]}/{total}' if total
                 else str(ident["track_number"])])])
+        else:
+            t.delall("TRCK")
         if ident.get("disc_number"):
             t.setall("TPOS", [TPOS(encoding=3, text=[str(ident["disc_number"])])])
+        else:
+            t.delall("TPOS")
 
     # ---- audio-derived (always) ----
     if audio.get("bpm"):

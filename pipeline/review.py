@@ -19,6 +19,7 @@ import os
 import re
 import sys
 import unicodedata
+from difflib import SequenceMatcher
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
@@ -589,6 +590,65 @@ def _norm(s):
     return re.sub(r"[^a-z0-9]+", " ", s).strip()
 
 
+# How alike two names have to be before a link counts as confirming the match
+# it replaced rather than replacing it. "EDEN - circles" against "EDEN -
+# Circles" is a spelling, so the recording ID survives; "Ensemble
+# Pittoresque - Ontwaakt" against "Mile Kitic - Sampion" is a different song
+# and everything the old match knew about it goes with it. Deliberately high:
+# keeping a wrong MBID is the failure this exists to prevent, and re-enriching
+# a right one costs one lookup.
+SAME_RECORDING = 0.92
+
+
+def same_recording(old, artist, title):
+    """-> True when a hint only respells the match it is replacing.
+
+    Compared as one string, artist and title together, because a link that
+    changes only the artist ("Gospoda" for "Elitni Odredi") is exactly the
+    case where the old album, year and recording ID must not be inherited.
+    """
+    was = f"{old.get('artist') or ''} {old.get('title') or ''}".strip()
+    now = f"{artist or ''} {title or ''}".strip()
+    if not was or not now:
+        return False
+    a, b = _norm(was), _norm(now)
+    return bool(a) and bool(b) and SequenceMatcher(None, a, b).ratio() >= SAME_RECORDING
+
+
+# What a match knows only because of the identity it was matched to. When the
+# identity changes, these describe the song that was rejected.
+IDENTITY_FIELDS = ("recording_id", "release", "cover_url", "isrc",
+                   "fingerprint_score", "artist_similarity",
+                   "title_similarity", "combined")
+
+
+def rename_match(m, rel, artist, title, recording_id=None):
+    """-> (match, release, kept) with the answer's name on it.
+
+    One boundary, however the name was changed: a link, or a name you typed.
+    Both replace the artist and title on a match that was found by other
+    means, and everything that match knew about the album, the recording and
+    the artwork was true of the song it found, not of the one you named.
+
+    `kept` is False when those facts have been cleared. Two ways to lose them:
+    the names describe a different song, or the answer carries a recording ID
+    that disagrees with the one already there. The second matters even when
+    the names agree, because taking the new ID while keeping the old ISRC and
+    album hands cascade.py a seed assembled from two recordings.
+    """
+    m = dict(m or {})
+    kept = same_recording(m, artist, title)
+    if kept and recording_id and m.get("recording_id") \
+            and m["recording_id"] != recording_id:
+        kept = False
+    if not kept:
+        for k in IDENTITY_FIELDS:
+            m.pop(k, None)
+        rel = {}
+    m["artist"], m["title"] = artist, title
+    return m, dict(rel or {}), kept
+
+
 def _songkey(artist, title, filename):
     """Identity of the SONG, independent of which file it came from."""
     base = f"{artist or ''} {title or ''}".strip() or os.path.splitext(filename)[0]
@@ -956,27 +1016,26 @@ def main():
             # not inside it: a link that names the song but not the artist is
             # answered by writing the artist beside it, and testing only
             # res["artist"] made that the one case where the note was parsed
-            # and then ignored.
+            # and then ignored. It is also the name the identity check below
+            # has to compare, since it is the one that ends up on the row.
             note = hint_note(payload)
             resolved = bool(res) and not res.get("error")
             if resolved and (res.get("artist") or
                              (res.get("title") and note.get("artist"))):
-                m = dict(m or {})
-                m["artist"] = res.get("artist") or note["artist"]
-                m["title"] = res["title"]
+                # A link answers "which song is this", so a link that names a
+                # different song invalidates what the rejected match knew.
+                m, rel, _ = rename_match(m, rel,
+                                         note.get("artist") or res.get("artist"),
+                                         note.get("title") or res["title"],
+                                         res.get("recording_id"))
                 if res.get("recording_id"):
                     m["recording_id"] = res["recording_id"]
                 rel = dict(res.get("release") or rel or {})
-                m["release"] = rel
                 m["source"] = "youtube-hint"
-                for k in ("artist", "title"):
-                    if note.get(k):
-                        m[k] = note[k]
                 for k in ("album", "year"):
                     if note.get(k):
                         rel[k] = note[k]
-                if note:
-                    m["release"] = rel
+                m["release"] = rel
                 e["match"] = m
                 # A pasted search is a supported way to answer, but its result
                 # is the first thing YouTube offered, not a video anyone
@@ -1008,12 +1067,14 @@ def main():
             # so it stays visible instead of vanishing.
             reasons = (reasons or []) + [f"your note: {payload[:60]}"]
         elif kind == "override":
-            m = dict(m or {})
-            if payload.get("artist"):
-                m["artist"] = payload["artist"]
-            if payload.get("title"):
-                m["title"] = payload["title"]
-            rel = dict(rel or {})
+            # The same boundary as the link branch. A name you typed replaces
+            # the match just as completely as a link does, so the album, year,
+            # recording ID and artwork the old match brought with it are no
+            # more true here than they were there.
+            m, rel, _ = rename_match(
+                m, rel,
+                payload.get("artist") or (m or {}).get("artist"),
+                payload.get("title") or (m or {}).get("title"))
             if payload.get("album"):
                 rel["album"] = payload["album"]
             if payload.get("year"):
