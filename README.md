@@ -33,6 +33,12 @@ input/             put your music folders here, or symlink them:
 
 ## What it produces
 
+> Upgrading from a version that wrote `out/`? Rename the folder,
+> `mv out output`, and point `config/config.yaml`'s `directory:` at
+> `../output/_all`. Both are yours and gitignored, so nothing here can do it
+> for you, and leaving the old tree in place means a second full copy that
+> `--prune` cannot see: it only knows about the folder it was told to write.
+
 ```
 output/_all/       one copy of every song, tagged, in the same subfolder
                    layout as your sources; a .lrc sidecar next to each
@@ -827,8 +833,8 @@ records a build that has nothing to do with the one just made.
 Pointed at the main checkout's `output/_all`, which every session shares,
 `snapshot.py` refuses unless you pass `--allow-shared-read`. That check
 recognises the shared output whether it sits inside the checkout or is a
-symlink to another filesystem, so moving `output/` to a bigger partition does not
-quietly switch the guard off.
+symlink to another filesystem, so moving `output/` to a bigger partition does
+not quietly switch the guard off.
 
 `baseline/` is gitignored: it lists real filenames, so it describes the library
 the same way `hints.tsv` does. Delete `baseline/<issue>/` when the issue is
