@@ -90,9 +90,7 @@ def main():
                     default=max(2, (os.cpu_count() or 4) - 2))
     args = ap.parse_args()
 
-    files = []
-    for root in args.root:
-        files.extend(sources.walk(root))
+    files = list(sources.walk(args.root))
     if args.limit:
         files = files[: args.limit]
 

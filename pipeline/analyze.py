@@ -658,21 +658,20 @@ def main():
         done = json.load(open(CACHE))
 
     todo = []
-    for root in args.root:
-        for p in sources.walk(root):
-            # Fall back to the path when no fingerprint exists, so analysis is
-            # never blocked on the fingerprint stage having run.
-            fp = fps.get(p, "path:" + p)
-            # Two files can share a fingerprint and still need separate
-            # entries: the same song downloaded into two source folders, or an
-            # mp3 and an m4a of one master. Keying on the fingerprint alone
-            # meant the second file had no analysis under its own path at all,
-            # so dedupe could not measure it, could not drop it, and shipped
-            # the song twice under two names.
-            if fp in done and done[fp].get("path") not in (None, p):
-                fp = fp + "|" + p
-            if fp not in done:
-                todo.append((p, fp))
+    for p in sources.walk(args.root):
+        # Fall back to the path when no fingerprint exists, so analysis is
+        # never blocked on the fingerprint stage having run.
+        fp = fps.get(p, "path:" + p)
+        # Two files can share a fingerprint and still need separate
+        # entries: the same song downloaded into two source folders, or an
+        # mp3 and an m4a of one master. Keying on the fingerprint alone
+        # meant the second file had no analysis under its own path at all,
+        # so dedupe could not measure it, could not drop it, and shipped
+        # the song twice under two names.
+        if fp in done and done[fp].get("path") not in (None, p):
+            fp = fp + "|" + p
+        if fp not in done:
+            todo.append((p, fp))
 
     if args.limit:
         todo = todo[: args.limit]

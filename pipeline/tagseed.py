@@ -153,11 +153,10 @@ def build(roots, cache_path=None):
     """Scan roots and return {path: seed}. Cheap: tag reads only."""
     import json
     seeds = {}
-    for root in roots:
-        for p in sources.walk(root):
-            s = extract(p)
-            if s:
-                seeds[p] = s
+    for p in sources.walk(roots):
+        s = extract(p)
+        if s:
+            seeds[p] = s
     if cache_path:
         json.dump(seeds, open(cache_path + ".tmp", "w"),
                   ensure_ascii=False, indent=1)

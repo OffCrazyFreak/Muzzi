@@ -24,20 +24,30 @@ import os
 AUDIO = (".mp3", ".m4a", ".flac", ".opus", ".ogg", ".wav")
 
 
-def walk(root, exts=AUDIO):
-    """-> every audio file under root, each real directory visited once."""
+def walk(roots, exts=AUDIO):
+    """-> every audio file under roots, each real directory visited once.
+
+    Takes all the roots at once rather than one at a time, because "visited
+    once" has to hold across them. Two entries in input/ can be links to the
+    same folder, or one root can sit inside another; walking them separately
+    means a private `seen` per walk, and the library is processed twice with
+    nothing reporting it. A single string is accepted for one root.
+    """
+    if isinstance(roots, str):
+        roots = [roots]
     seen = set()
-    for dirpath, dirs, names in os.walk(root, followlinks=True):
-        try:
-            st = os.stat(dirpath)
-        except OSError:
-            dirs[:] = []                  # vanished or unreadable mid-walk
-            continue
-        key = (st.st_dev, st.st_ino)
-        if key in seen:
-            dirs[:] = []
-            continue
-        seen.add(key)
-        for n in sorted(names):
-            if n.lower().endswith(exts):
-                yield os.path.join(dirpath, n)
+    for root in roots:
+        for dirpath, dirs, names in os.walk(root, followlinks=True):
+            try:
+                st = os.stat(dirpath)
+            except OSError:
+                dirs[:] = []              # vanished or unreadable mid-walk
+                continue
+            key = (st.st_dev, st.st_ino)
+            if key in seen:
+                dirs[:] = []
+                continue
+            seen.add(key)
+            for n in sorted(names):
+                if n.lower().endswith(exts):
+                    yield os.path.join(dirpath, n)
