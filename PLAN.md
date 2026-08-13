@@ -19,7 +19,10 @@ See `README.md` for how to run it. This file is the plan and the reasoning.
 | unmatched | 41 | needs a hint from you |
 
 Source split: AcoustID 157, MusicBrainz 75, Discogs 57. All three earn their
-place - they find *different* tracks.
+place - they find *different* tracks. The Discogs share is earned by
+`pipeline/textsearch.py`, which calls the Discogs search API directly; beets'
+`discogs` plugin is a second, separate path, used only by a manual
+`./beet import`.
 
 **Metadata:** artist+title 87%, album 87%, year 84%, cover-art ID 70%.
 **Audio analysis: 330/330, zero errors** - BPM, key, Camelot, danceability,
