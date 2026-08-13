@@ -48,6 +48,42 @@ _PROVIDED = re.compile(r"\n\n(.+?)\s+·\s+(.+?)\n")
 # "|" is a separator too: "Lucidious | Where'd You Go Remix" produced a title
 # that repeated the artist inside itself.
 _SPLIT = re.compile(r"\s+[-–—]\s+|\s*：\s*|\s+:\s+|\s*\|\s*")
+
+# A left side wrapped in quotes: the uploader is naming the song, not the act.
+_QUOTES = "\"'\u2018\u2019\u201c\u201d\u00ab\u00bb"
+# A right side that describes the recording instead of naming it. "A ... parody
+# of", "a cover of", "a remix of" and the bare forms of each.
+_DESCRIBES = re.compile(
+    r"^\s*(?:an?\s+[\w' ]{0,40}?)?"
+    r"(?:parody|cover|remix|tribute|mashup|medley|rendition)\b", re.I)
+
+
+def _quoted(s):
+    s = (s or "").strip()
+    return len(s) > 2 and s[0] in _QUOTES and s[-1] in _QUOTES
+
+
+def _unquote(s):
+    return (s or "").strip().strip(_QUOTES).strip()
+
+
+# A closing quote followed by a dash is a separator even with no space before
+# it. '"This is my Biome"- A Minecraft Parody' has none, so _SPLIT left the
+# title whole and it fell out at the bare-dash fallback further down, which
+# named the song as its own artist: the defect the quoted-title rule exists to
+# stop, reached by a different road.
+_QUOTE_DASH = re.compile(r"(?<=[" + _QUOTES + r"])\s*[-\u2013\u2014]\s+")
+
+
+def _split_title(s):
+    """-> the parts of a video title, on any separator it actually uses."""
+    parts = [p.strip() for p in _SPLIT.split(s or "") if p.strip()]
+    if len(parts) < 2:
+        parts = [p.strip() for p in _QUOTE_DASH.split(s or "", maxsplit=1)
+                 if p.strip()]
+    return parts
+
+
 # The same YouTube title cruft the filename parser strips.
 _CRUFT = re.compile(
     r"""\s*[\(\[\|]?\s*
@@ -363,8 +399,29 @@ def names_from(info):
                     m.group(1).strip(), "description")
 
     title = clean_title(info.get("video_title") or "")
-    parts = [p.strip() for p in _SPLIT.split(title) if p.strip()]
+    parts = _split_title(title)
     if len(parts) >= 2:
+        # A quoted left side plus a description on the right is not a credit.
+        # '"This is my Biome" - A Minecraft Parody of Maroon 5 Payphone' was
+        # read as artist '"This is my Biome"' at confidence 1.0, which is the
+        # song naming itself and the description becoming the title. The left
+        # side is the title here; the artist has to come from somewhere that
+        # actually knows it.
+        # Tested on the RAW title: clean_title strips the opening quote, so by
+        # here the left side reads 'This is my Biome"' and no longer looks
+        # quoted at all. '"Weird Al" Yankovic' is not caught, because it does
+        # not END on a quote: that really is the artist.
+        raw = _split_title(info.get("video_title") or "")
+        if (raw and _quoted(raw[0])
+                and _DESCRIBES.match(" - ".join(parts[1:]))):
+            said = _unquote(raw[0])
+            chan = (info.get("channel") or "").replace(" - Topic", "").strip()
+            if chan:
+                return chan, said, "quoted title, uploader"
+            # No channel to fall back on, so say the title and refuse to name
+            # an artist. review.py scores a hint with no artist below the auto
+            # bar, which is where a guess belongs.
+            return None, said, "quoted title, artist unknown"
         return parts[0], " - ".join(parts[1:]), "video title"
 
     # No separator in the title. The channel is the last thing to believe --
