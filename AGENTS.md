@@ -76,8 +76,8 @@ different rule when the code is ambiguous.
 
 - Write to a source folder. Sources are read-only. Stages write to `cache/`,
   `review` writes the spreadsheets in `review/`, `export` writes
-  `out/playlists/`, and only `write_tags` writes audio, as copies into
-  `out/_all`. Nothing else writes anywhere.
+  `output/playlists/`, and only `write_tags` writes audio, as copies into
+  `output/_all`. Nothing else writes anywhere.
 - Commit `hints.tsv`, `review/`, `cache/`, `out/`, `config/secrets.json`,
   `config/config.yaml`, or any audio, artwork or lyrics. They describe a
   personal library and are gitignored. `.gitignore` takes no inline comments:
@@ -134,7 +134,7 @@ branch-scoped, and git will not warn you, because git is not watching them.
 - **Never run anything with the main checkout as the working directory**, and
   never pass paths that resolve into it. `pipeline/*.py` derives its paths from
   the file's own location, so it stays inside your worktree; a bare
-  `out/_all` or `cache/analysis.json` argument does not, and lands on the real
+  `output/_all` or `cache/analysis.json` argument does not, and lands on the real
   library instead.
 - **Never regenerate shared state to test a change.** Rewriting
   `analysis.json` while another session is testing `dedupe` makes both sets of
@@ -168,7 +168,7 @@ and say which entries applied:
   *and* part of the filename. Change one, change the other.
 - **Both playlist forms.** Relative M3U, and the `--absolute` variant.
 - **The reverse.** If a stage can add something, something has to be able to
-  remove it. `out/_all` is rebuilt, not appended to, which is why `write_tags`
+  remove it. `output/_all` is rebuilt, not appended to, which is why `write_tags`
   reports leftovers and `--prune` exists. A one-way door is a bug.
 - **The review queue.** A new field that a human must confirm needs a column in
   `review/`, a way to answer it, and a line in `hints.tsv`, or it is unusable.
@@ -202,7 +202,7 @@ that prompted the fix. Run these with `./.venv/bin/python`, like every stage.
 3. `tools/snapshot.py --issue SLUG --label before`, make the change, then
    `--label after`. Add `--level out` when the fix touches what gets written;
    build that output with `write_tags.py --only baseline/SLUG/paths.txt
-   --out <your worktree>/out/_all`.
+   --out <your worktree>/output/_all`.
 4. `tools/snapdiff.py --issue SLUG --by-cohort`. **Missed** means the fix did
    nothing. **Collateral** means it broke something else. Both are failures.
    Quote the counts in the PR.

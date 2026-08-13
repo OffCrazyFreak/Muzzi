@@ -27,7 +27,7 @@ input/*
 # every API response, fingerprints, analysis, logs
 cache/
 # the tagged library and its playlists
-out/
+output/
 # per-track Essentia feature dumps
 features/
 # frozen verification samples and before/after snapshots: they list real

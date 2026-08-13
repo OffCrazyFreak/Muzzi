@@ -21,7 +21,7 @@ Deliberately imports fit() from pipeline.webmatch rather than reimplementing
 it, so this grades the pipeline's own notion of agreement and not a lookalike
 that might disagree with it.
 
-Usage: audit_lyrics.py [--out cache/audit_lyrics.json] [--lrc-dir out/_all]
+Usage: audit_lyrics.py [--out cache/audit_lyrics.json] [--lrc-dir output/_all]
                        [--gate 2.0] [--json]
 """
 import argparse
@@ -43,7 +43,7 @@ REVIEW = os.path.join(CACHE, "review.json")
 ANALYSIS = os.path.join(CACHE, "analysis.json")
 SILENCE = os.path.join(CACHE, "silence.json")
 DEFAULT_OUT = os.path.join(CACHE, "audit_lyrics.json")
-DEFAULT_LRC = os.path.join(HERE, "out", "_all")
+DEFAULT_LRC = os.path.join(HERE, "output", "_all")
 
 # Same shape verify_lyrics._LRC_TS accepts, kept local so this stays runnable
 # even if that module cannot import faster_whisper.

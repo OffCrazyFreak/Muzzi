@@ -502,12 +502,12 @@ def refresh_loudness(workers, force=False):
     missing file is not evidence that the cached number is wrong.
 
     NOTE what this cannot fix. These entries describe the SOURCE files, and
-    write_tags copies those to out/_all. Anything that edits an output copy
+    write_tags copies those to output/_all. Anything that edits an output copy
     after the fact leaves that copy's ReplayGain describing audio it no longer
     contains, and no amount of re-measuring the source will show it, because
     the source did not change. That case needs the output re-measured and
     re-tagged, and tools/audit_compare.py is what catches it, because it
-    measures out/_all itself.
+    measures output/_all itself.
 
     Trimming leading silence is NOT such an edit, which is worth stating
     because it looks like one. Measured on six trimmed files with cuts of 0.5

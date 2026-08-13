@@ -165,7 +165,7 @@ def coverage(tracks, cache):
     print(f"    with a BPM    "
           f"{count(lambda t: (by_path.get(t['path']) or {}).get('bpm'))}")
     print(f"    dedupe losers {count(lambda t: t['path'] in losers)}"
-          "  (never written to out/_all)")
+          "  (never written to output/_all)")
 
 
 def main():

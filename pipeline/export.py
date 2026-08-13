@@ -70,7 +70,7 @@ def link_or_copy(src, dst):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=os.path.join(HERE, "out"))
+    ap.add_argument("--out", default=os.path.join(HERE, "output"))
     ap.add_argument("--crates",
                     default="BPM,Language,Decade,Mood,Quality,Unknown,Genre",
                     help="comma-separated crate groups to emit. Camelot (key) "

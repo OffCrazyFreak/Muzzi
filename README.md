@@ -14,7 +14,7 @@ review queue, remembers your answers permanently, and checks the audio against
 the lyrics before it trusts a name. beets does the tag writing underneath.
 
 Your source folders are never modified. Every stage writes to `cache/`, and
-only the last stage writes audio -- as copies, into `out/_all`.
+only the last stage writes audio -- as copies, into `output/_all`.
 
 Licensed [AGPL-3.0](LICENSE).
 
@@ -34,9 +34,9 @@ input/             put your music folders here, or symlink them:
 ## What it produces
 
 ```
-out/_all/          one copy of every song, tagged, in the same subfolder
+output/_all/          one copy of every song, tagged, in the same subfolder
                    layout as your sources; a .lrc sidecar next to each
-out/playlists/     .m3u by BPM band, decade, language, mood, quality, and
+output/playlists/     .m3u by BPM band, decade, language, mood, quality, and
                    the hand-curated scenes; 15 tracks minimum, except
                    Language, which is kept whatever its size
 review/            numbered spreadsheets, only what needs your eyes
@@ -284,7 +284,7 @@ can't be wrong about which file it's describing:
 | `artist_names` | one spelling per artist: Cyrillic to Latin, channel suffixes off, ALL CAPS down, and typos merged into the confirmed spelling |
 | `dedupe_names` | duplicates fingerprinting can't see -- two YouTube uploads of one song are different recordings, so only the name pairs them |
 | `yt_links` | which YouTube video each file came from, merged from every source that knows and tiered by how much it can be trusted |
-| `write_tags` | copies to `out/_all` and writes every tag, plus `MUZZI_*` provenance stamps. `--prune` deletes output left over from an earlier build |
+| `write_tags` | copies to `output/_all` and writes every tag, plus `MUZZI_*` provenance stamps. `--prune` deletes output left over from an earlier build |
 | `export` | playlists |
 | `verify` | reads the output back and reports what needs attention |
 
@@ -444,7 +444,7 @@ drift apart.
 
 **Anything that edits an output file after tagging invalidates its
 ReplayGain.** `cache/analysis.json` describes the *source* files; `write_tags`
-copies those into `out/_all`. Re-encoding a copy, or otherwise touching its
+copies those into `output/_all`. Re-encoding a copy, or otherwise touching its
 audio, leaves the tags describing audio the file no longer contains.
 
 Trimming leading silence is the exception, and it is worth naming because it
@@ -456,7 +456,7 @@ therefore owes the loudness stage nothing.
 
 `analyze.py --refresh-loudness` will **not** catch this, and cannot: it
 re-measures the source, which did not change. Nor will `--force`. The check
-that does catch it is `tools/audit_compare.py`, which measures `out/_all`
+that does catch it is `tools/audit_compare.py`, which measures `output/_all`
 itself and reports the written gain against the real file. So a stage that
 edits output audio owns re-tagging what it edited, and the audit is what proves
 it did.
@@ -550,7 +550,7 @@ song to keep by measured spectral cutoff, so running it against an
 quality figure at all -- and it loses by default. This kept the worse copy of
 69 songs, including a 10.3kHz mp3 over a 15.7kHz replacement.
 
-**The output folder is rebuilt, not appended to.** `out/_all` has no memory of
+**The output folder is rebuilt, not appended to.** `output/_all` has no memory of
 which build wrote what, so a file whose source later became a duplicate loser
 stayed there forever and the library quietly grew a second copy of 59 songs.
 `write_tags` now reports leftovers every run and `--prune` removes them. It
@@ -714,8 +714,8 @@ tools/                  standalone helpers (sample, snapshot, snapdiff,
                         relocate)
 config/                 keys and hand-maintained corrections
 cache/                  every stage's output; safe to delete, expensive to rebuild
-out/_all                the result
-out/playlists           .m3u playlists
+output/_all                the result
+output/playlists           .m3u playlists
 review/                 numbered spreadsheets, only what needs your eyes
 baseline/               frozen verification samples and before/after snapshots
 hints.tsv               every answer you have ever given
@@ -805,23 +805,23 @@ annoying; a track shipping a wrong artist without anyone being asked is the
 failure everything else here is arranged to prevent.
 
 `--level cache` (the default) reads the stage caches and takes seconds.
-`--level out` reads what actually landed in `out/_all`: filenames, tags, the
+`--level out` reads what actually landed in `output/_all`: filenames, tags, the
 `.lrc` sidecar, artwork and playlist membership in both M3U forms. Build that
 output for the sample alone, into a scratch directory, rather than rebuilding
 the library:
 
 ```bash
 $P pipeline/write_tags.py --only baseline/m4a-genres/paths.txt \
-   --out /tmp/out/_all
+   --out /tmp/output/_all
 $P tools/snapshot.py --issue m4a-genres --label before \
-   --level out --out-dir /tmp/out/_all
+   --level out --out-dir /tmp/output/_all
 ```
 
 `--out-dir` has to name the same scratch directory the subset was built into.
-Left off, it defaults to `out/_all` beside this checkout, and the snapshot
+Left off, it defaults to `output/_all` beside this checkout, and the snapshot
 records a build that has nothing to do with the one just made.
 
-Pointed at the main checkout's `out/_all`, which every session shares,
+Pointed at the main checkout's `output/_all`, which every session shares,
 `snapshot.py` refuses unless you pass `--allow-shared-read`. That check
 recognises the shared output whether it sits inside the checkout or is a
 symlink to another filesystem, so moving `out/` to a bigger partition does not
@@ -840,9 +840,9 @@ claims to describe, `tools/` decodes the finished library and compares:
 
 ```bash
 # duration, bitrate and loudness, from ffprobe and ffmpeg
-./.venv/bin/python tools/audit_truth.py out/_all cache/audit_truth.json
+./.venv/bin/python tools/audit_truth.py output/_all cache/audit_truth.json
 # spectral cutoff, through analyze.py's own code
-./.venv/bin/python tools/audit_cutoff.py out/_all cache/audit_cutoff.json
+./.venv/bin/python tools/audit_cutoff.py output/_all cache/audit_cutoff.json
 # joins both against the written tags
 ./.venv/bin/python tools/audit_compare.py
 ```

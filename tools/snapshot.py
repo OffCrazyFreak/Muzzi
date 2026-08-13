@@ -10,7 +10,7 @@ Two levels, because the fixes come in two shapes:
 
   cache  every stage before write_tags, read straight out of cache/. Seconds,
          and it needs no output built.
-  out    what actually landed in out/_all: filenames, tags, the .lrc sidecar,
+  out    what actually landed in output/_all: filenames, tags, the .lrc sidecar,
          the artwork and playlist membership. This is the only level that can
          see a defect in the MP4 tag path or a playlist that lost a track.
 
@@ -190,7 +190,7 @@ def index_output(out_dir):
 def playlist_dir(out_dir):
     """-> where export.py put the M3Us, or None.
 
-    write_tags writes out/_all and export writes out/playlists, so the
+    write_tags writes output/_all and export writes output/playlists, so the
     playlists are a sibling of the audio, not a child of it. Looking only
     inside out_dir finds nothing and reports every track as belonging to no
     playlist, which is indistinguishable from a real regression.
@@ -304,12 +304,12 @@ def main():
     ap.add_argument("--level", default="cache",
                     choices=("cache", "out", "both"),
                     help="cache: every stage before write_tags (default). "
-                         "out: what landed in out/_all. both: all of it")
+                         "out: what landed in output/_all. both: all of it")
     ap.add_argument("--cache", default=os.path.join(HERE, "cache"))
     ap.add_argument("--baseline", default=os.path.join(HERE, "baseline"))
-    ap.add_argument("--out-dir", default=os.path.join(HERE, "out", "_all"))
+    ap.add_argument("--out-dir", default=os.path.join(HERE, "output", "_all"))
     ap.add_argument("--allow-shared-read", action="store_true",
-                    help="permit reading the main checkout's out/_all, which "
+                    help="permit reading the main checkout's output/_all, which "
                          "every other session is also using")
     ap.add_argument("--overwrite", action="store_true",
                     help="replace an existing snapshot for this label")
@@ -354,13 +354,13 @@ def main():
         # The shared out/ is named separately because it does not have to sit
         # inside the checkout: pointing it at another filesystem is on the
         # table for space, and `inside()` resolves symlinks, so the moment
-        # main/out becomes a link the location test stops matching and the
+        # main/output becomes a link the location test stops matching and the
         # guard silently stops guarding.
         # Both halves of the test need it, or the main checkout reading its
         # own output would start failing the moment the link exists.
-        shared_out = os.path.join(shared, "out") if shared else None
+        shared_out = os.path.join(shared, "output") if shared else None
         mine = inside(args.out_dir, HERE) or \
-            inside(args.out_dir, os.path.join(HERE, "out"))
+            inside(args.out_dir, os.path.join(HERE, "output"))
         if (inside(args.out_dir, shared) or inside(args.out_dir, shared_out)) \
                 and not mine:
             if not args.allow_shared_read:

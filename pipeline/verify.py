@@ -15,8 +15,8 @@ Answers three questions:
 Fast: reads tags only, no audio decoding. ~3000 files in a few seconds.
 
 Usage:
-  verify.py out/_all
-  verify.py out/_all --json report.json
+  verify.py output/_all
+  verify.py output/_all --json report.json
 """
 import argparse
 import json

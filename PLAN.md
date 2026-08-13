@@ -53,7 +53,7 @@ hint resolution all ship today.
 
 **A. Write the tags** (the actual deliverable)
 Everything computed so far lives in `cache/`. Write it into ID3 on copies in
-`out/_all/`: artist, title, album, year, genre, BPM, TKEY, Camelot, ReplayGain
+`output/_all/`: artist, title, album, year, genre, BPM, TKEY, Camelot, ReplayGain
 (track and album gain, true peak, and the reference loudness they were computed
 against), quality grade, language. Originals never touched.
 
