@@ -78,7 +78,7 @@ different rule when the code is ambiguous.
   `review` writes the spreadsheets in `review/`, `export` writes
   `output/playlists/`, and only `write_tags` writes audio, as copies into
   `output/_all`. Nothing else writes anywhere.
-- Commit `hints.tsv`, `review/`, `cache/`, `out/`, `config/secrets.json`,
+- Commit `hints.tsv`, `review/`, `cache/`, `output/`, `config/secrets.json`,
   `config/config.yaml`, or any audio, artwork or lyrics. They describe a
   personal library and are gitignored. `.gitignore` takes no inline comments:
   a trailing `# ...` becomes part of the pattern and the rule matches nothing.
@@ -125,7 +125,7 @@ requests all still cost time.
 Several sessions work on this repository at once, each in its own worktree
 under `.claude/worktrees/`. The branches are isolated. The library is not.
 
-`cache/`, `out/`, `review/`, `features/`, `redownloaded/`, `models/`,
+`cache/`, `output/`, `review/`, `features/`, `redownloaded/`, `models/`,
 `hints.tsv`, `.venv/` and `bin/` are gitignored, so a worktree never gets its
 own copy. There is exactly one of each, in the main checkout at the repository
 root, and every session sees the same files. Nothing about them is
@@ -134,8 +134,8 @@ branch-scoped, and git will not warn you, because git is not watching them.
 - **Never run anything with the main checkout as the working directory**, and
   never pass paths that resolve into it. `pipeline/*.py` derives its paths from
   the file's own location, so it stays inside your worktree; a bare
-  `output/_all` or `cache/analysis.json` argument does not, and lands on the real
-  library instead.
+  `output/_all` or `cache/analysis.json` argument does not, and lands on the
+  real library instead.
 - **Never regenerate shared state to test a change.** Rewriting
   `analysis.json` while another session is testing `dedupe` makes both sets of
   results unattributable, and `dedupe` picks which copy of a song to keep from
@@ -148,9 +148,9 @@ branch-scoped, and git will not warn you, because git is not watching them.
 - **Never delete or prune shared state** to get a clean run. Someone else is
   mid-run in it. In particular, never run `git clean -xfd` in the main
   checkout: it deletes ignored files, which here means the caches, the whole
-  of `out/`, and `hints.tsv`, the file holding every review answer ever given
-  and the one thing nothing can regenerate. Use `git stash -u`, or a fresh
-  worktree, when you need a clean tree.
+  of `output/`, and `hints.tsv`, the file holding every review answer ever
+  given and the one thing nothing can regenerate. Use `git stash -u`, or a
+  fresh worktree, when you need a clean tree.
 
 If your change needs pipeline output to prove it works, build that output from
 a handful of files inside your own worktree.
@@ -168,8 +168,8 @@ and say which entries applied:
   *and* part of the filename. Change one, change the other.
 - **Both playlist forms.** Relative M3U, and the `--absolute` variant.
 - **The reverse.** If a stage can add something, something has to be able to
-  remove it. `output/_all` is rebuilt, not appended to, which is why `write_tags`
-  reports leftovers and `--prune` exists. A one-way door is a bug.
+  remove it. `output/_all` is rebuilt, not appended to, which is why
+  `write_tags` reports leftovers and `--prune` exists. A one-way door is a bug.
 - **The review queue.** A new field that a human must confirm needs a column in
   `review/`, a way to answer it, and a line in `hints.tsv`, or it is unusable.
 

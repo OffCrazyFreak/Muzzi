@@ -36,7 +36,7 @@ and `bin/fpcalc`, then run against a copy of a few files:
 - **Read `AGENTS.md` first.** It holds the conventions, including the target
   players. Every metadata change must say what Namida does with it, what
   Samsung Music does with it, and what a generic Android player does with it.
-- **Never commit personal data.** `hints.tsv`, `review/`, `cache/`, `out/`,
+- **Never commit personal data.** `hints.tsv`, `review/`, `cache/`, `output/`,
   `config/secrets.json`, `config/config.yaml` and any audio are gitignored for
   a reason. Check `git status` before committing.
 - **Source folders are read-only.** Nothing may write to the input.
