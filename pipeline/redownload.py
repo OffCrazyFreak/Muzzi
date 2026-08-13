@@ -26,11 +26,21 @@ Sources, in order of how much they can be trusted to be the right recording:
 
 Downloads run in batches so a long run can be watched, stopped and resumed.
 
+`--missing` answers a different question with the same machinery: a source
+file that has been deleted keeps erroring in write_tags on every run, and
+those errors self-disable --prune, so stale output can never be cleaned
+automatically. In that mode the rows selected are the ones whose source is
+gone, the file is restored to the path it was at, and the bandwidth bar does
+not apply, because there is nothing left to be better than. The duration check
+still does: analysis.json recorded the length before the file went, so a
+different recording cannot take its place.
+
 Usage:
   redownload.py --dry-run            # show what would be fetched
   redownload.py                      # fetch everything below the bar
   redownload.py --batch 50 --limit 100
   redownload.py --min-cutoff 15500   # which files count as needing it
+  redownload.py --missing --dry-run  # the sources that are gone
 """
 import argparse
 import json
@@ -131,9 +141,25 @@ def find_source(row, facts, hints):
     return None, "no confident match on YouTube Music"
 
 
-def download(vid, dest_stem):
+def download(vid, dest_stem, cookies=None):
     """-> path to the downloaded audio, or None."""
     tmpl = dest_stem + ".%(ext)s"
+    # YouTube answers a share of anonymous requests with 403. A cookie jar
+    # exported from a signed-in browser (tools/export_cookies.py) is what gets
+    # those through; without one they are simply lost.
+    #
+    # Each download gets its own copy, because yt-dlp writes the jar back when
+    # the server updates a cookie. Eight workers sharing one file rewrote it
+    # under each other until it stopped being a cookie file at all, and every
+    # download after that failed with "does not look like Netscape format".
+    jar = None
+    if cookies:
+        jar = dest_stem + ".cookies.txt"
+        try:
+            shutil.copyfile(cookies, jar)
+        except OSError:
+            jar = None
+    auth = ["--cookies", jar] if jar else []
     try:
         p = subprocess.run(
             # m4a on purpose, not "bestaudio". YouTube's best audio is Opus in
@@ -150,10 +176,14 @@ def download(vid, dest_stem):
             ["yt-dlp", "--no-warnings", "--no-playlist", "--embed-metadata",
              "-f",
              "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio", "-o", tmpl,
+             *auth,
              f"https://music.youtube.com/watch?v={vid}"],
             capture_output=True, text=True, timeout=300)
     except Exception as e:
         return None, str(e)[:60]
+    finally:
+        if jar and os.path.exists(jar):
+            os.remove(jar)
     if p.returncode != 0:
         tail = (p.stderr or "").strip().splitlines()
         return None, tail[-1][:80] if tail else f"yt-dlp exit {p.returncode}"
@@ -197,7 +227,7 @@ def measure(path):
 
 def fetch_one(task):
     """Download stage only. Network-bound, safe in threads."""
-    row, an, facts, hints = task
+    row, an, facts, hints, cookies = task
     src = row["path"]
     vid, how = find_source(row, facts, hints)
     if not vid:
@@ -209,7 +239,7 @@ def fetch_one(task):
                 "video_id": vid}
     base = os.path.splitext(os.path.basename(src))[0][:80]
     stem = os.path.join(STAGE_DIR, f"{abs(hash(src)) % 10**10}_{base}")
-    got, err = download(vid, stem)
+    got, err = download(vid, stem, cookies)
     if not got:
         return {"path": src, "file": row["file"], "status": "download failed",
                 "why": err, "video_id": vid}
@@ -242,6 +272,23 @@ def judge(res, an, args):
     if old_dur and new_dur and abs(new_dur - old_dur) > args.max_drift:
         return drop("rejected",
                     f"different length ({new_dur:.0f}s vs {old_dur:.0f}s)")
+
+    if args.missing:
+        # Restoring a source that was deleted, not improving one that is still
+        # there. There is nothing to be better than, so the bandwidth bar does
+        # not apply; the length check above is what stops a different
+        # recording taking the place of the one that is gone. Analysis still
+        # holds that length because it was measured before the file went.
+        src = res["path"]
+        dst = os.path.splitext(src)[0] + os.path.splitext(got)[1]
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        if os.path.exists(dst):
+            return drop("rejected", "a file is already back at that path")
+        shutil.move(got, dst)
+        return {"file": res["file"], "status": "restored",
+                "video_id": res["video_id"], "how": res["how"],
+                "new_cutoff": round(new_cut), "path": dst}
+
     if new_cut < old_cut + args.min_gain:
         return drop("not better", f"{new_cut:.0f}Hz vs {old_cut:.0f}Hz")
 
@@ -278,6 +325,12 @@ def main():
     ap.add_argument("--limit", type=int)
     ap.add_argument("--workers", type=int)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--cookies", help="Netscape cookie file for yt-dlp; "
+                                     "tools/export_cookies.py writes one")
+    ap.add_argument("--missing", action="store_true",
+                    help="fetch the rows whose source file is gone, back to "
+                         "the path it was at, instead of the rows that "
+                         "measure badly")
     args = ap.parse_args()
 
     rows = {r["path"]: r for r in json.load(open(REVIEW))}
@@ -288,29 +341,44 @@ def main():
     done = json.load(open(REPORT)) if os.path.exists(REPORT) else {}
 
     todo = []
-    for path, an in analysis.items():
-        cut = an.get("spectral_cutoff_hz") or 0
-        if cut >= args.min_cutoff:
-            continue
-        row = rows.get(path)
-        if not row or path in done:
-            continue
-        todo.append((path, row, an))
-    todo.sort(key=lambda x: x[2].get("spectral_cutoff_hz") or 0)
+    if args.missing:
+        # A deleted source keeps erroring in write_tags on every run, and
+        # those errors self-disable --prune, so stale output can never be
+        # cleaned automatically until the file is back.
+        for path, row in rows.items():
+            if os.path.exists(path) or path in done:
+                continue
+            todo.append((path, row, analysis.get(path, {})))
+        todo.sort(key=lambda x: x[0])
+    else:
+        for path, an in analysis.items():
+            cut = an.get("spectral_cutoff_hz") or 0
+            if cut >= args.min_cutoff:
+                continue
+            row = rows.get(path)
+            if not row or path in done:
+                continue
+            todo.append((path, row, an))
+        todo.sort(key=lambda x: x[2].get("spectral_cutoff_hz") or 0)
     if args.limit:
         todo = todo[: args.limit]
 
     args.common_root = common_root(list(analysis))
 
     if not todo:
-        print(f"  nothing below {args.min_cutoff:.0f}Hz left ({len(done)} done)\n")
+        left = ("no source file is missing" if args.missing
+                else f"nothing below {args.min_cutoff:.0f}Hz left")
+        print(f"  {left} ({len(done)} done)\n")
         return 0
 
-    print(f"\n  {len(todo)} files measure below {args.min_cutoff:.0f}Hz "
-          f"({len(done)} already attempted)")
+    what = ("source files are missing" if args.missing
+            else f"files measure below {args.min_cutoff:.0f}Hz")
+    print(f"\n  {len(todo)} {what} ({len(done)} already attempted)")
     if args.dry_run:
         for path, row, an in todo[:40]:
-            print(f"    {an.get('spectral_cutoff_hz'):>6}Hz  "
+            mark = ("  gone  " if args.missing
+                    else f"{an.get('spectral_cutoff_hz'):>6}Hz")
+            print(f"    {mark}  "
                   f"{str(row.get('proposed_artist'))[:22]:22} | "
                   f"{str(row.get('proposed_title'))[:34]}")
         print("\n  dry run; nothing downloaded\n")
@@ -328,7 +396,7 @@ def main():
           f"batches of {args.batch}\n")
 
     lock = threading.Lock()
-    stats = {"kept": 0, "not better": 0, "rejected": 0,
+    stats = {"kept": 0, "restored": 0, "not better": 0, "rejected": 0,
              "download failed": 0, "no source": 0}
     t0 = time.time()
 
@@ -344,7 +412,8 @@ def main():
             futs = {ex.submit(fetch_one, (row,
                                           analysis.get(p, {}),
                                           (cascade.get(p) or {}).get("facts") or {},
-                                          hints)): p for p, row, _a in batch}
+                                          hints, args.cookies)): p
+                    for p, row, _a in batch}
             for f in as_completed(futs):
                 p = futs[f]
                 try:
@@ -380,18 +449,28 @@ def main():
                     print(f"    KEPT  +{res['gain']:>5}Hz  "
                           f"{res['old_cutoff']:>5}->{res['new_cutoff']:<5} "
                           f"{res['file'][:44]}", flush=True)
+                elif res["status"] == "restored":
+                    print(f"    BACK  {res['new_cutoff']:>5}Hz  "
+                          f"{res['how'][:20]:20} {res['file'][:44]}",
+                          flush=True)
         json.dump(done, open(REPORT + ".tmp", "w"), ensure_ascii=False, indent=1)
         os.replace(REPORT + ".tmp", REPORT)
-        print(f"      kept {stats['kept']}, not better {stats['not better']}, "
-              f"failed {stats['download failed']}", flush=True)
+        got = (f"restored {stats['restored']}" if args.missing
+               else f"kept {stats['kept']}, not better {stats['not better']}")
+        print(f"      {got}, failed {stats['download failed']}", flush=True)
 
     shutil.rmtree(STAGE_DIR, ignore_errors=True)
     print(f"\n  {len(todo)} attempted in {(time.time()-t0)/60:.1f} min\n")
     for k, v in sorted(stats.items(), key=lambda x: -x[1]):
         print(f"    {k:18} {v}")
-    print(f"\n  better files -> {OUT_DIR}")
-    print("  originals untouched. Feed the folder back through run.py when "
-          "you are happy with it.\n")
+    if args.missing:
+        print(f"\n  {stats['restored']} sources back where they were.")
+        print("  Re-run fingerprint and analyze over them, then review, "
+              "before write_tags --prune.\n")
+    else:
+        print(f"\n  better files -> {OUT_DIR}")
+        print("  originals untouched. Feed the folder back through run.py "
+              "when you are happy with it.\n")
     return 0
 
 
