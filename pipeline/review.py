@@ -984,6 +984,15 @@ def main():
                 reasons = [f"{where} ({res.get('derived_from')}"
                            f"{', your note' if note else ''}"
                            f"{', confirmed on MusicBrainz' if res.get('enriched') else ''})"]
+            elif res and not res.get("error") and res.get("title"):
+                # Resolved, and it deliberately named no artist: the video
+                # title said what the song is called without saying who by,
+                # so hints_resolve declined to invent one. Saying "not
+                # resolved yet" here would send you off to re-run a stage
+                # that has already done its job and would decline again.
+                reasons = (reasons or []) + [
+                    f"your link says the song is \"{res['title']}\" but names "
+                    f"no artist - add one as 'artist: X' beside the link"]
             else:
                 reasons = (reasons or []) + [
                     "YouTube link not resolved yet - run hints_resolve.py"]

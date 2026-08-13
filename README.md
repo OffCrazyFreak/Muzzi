@@ -226,7 +226,7 @@ seeing what the previous one failed on:
 | `tagseed` | scores *where* a name came from, so a "Lyrics Channel HD" artist tag doesn't outrank a filename |
 | `from_filename` | believe the filename, then ask MusicBrainz to confirm it |
 | `webmatch` | YouTube Music, Deezer, iTunes, YouTube, SoundCloud |
-| `hints_resolve` | turns links you paste into metadata, via yt-dlp. A wholly decorative bracketed group is removed whole, so `(Lyrics/Tekst)` cannot leave its slash behind, while `AC/DC` and `(Payphone Parody)` are kept. An upload year goes only when the title carried decoration too, so `Sarvagon 2015` survives, and a `\| NCS - Copyright Free Music` slogan is dropped. A pasted search is answered too, but its first result is scored below the auto bar and lands in review, because nobody picked it |
+| `hints_resolve` | turns links you paste into metadata, via yt-dlp. A wholly decorative bracketed group is removed whole, so `(Lyrics/Tekst)` cannot leave its slash behind, while `AC/DC` and `(Payphone Parody)` are kept. An upload year goes only when the title carried decoration too, so `Sarvagon 2015` survives, and a `\| NCS - Copyright Free Music` slogan is dropped. A pasted search is answered too, but its first result is scored below the auto bar and lands in review, because nobody picked it. A quoted left side followed by a description (`"This is my Biome" - A Minecraft Parody of ...`) is a title and a description, not an artist and a title, so the quoted part becomes the title and the artist comes from the uploader or from you |
 
 **Analysis** is independent of all that, because it reads the waveform and
 can't be wrong about which file it's describing:
