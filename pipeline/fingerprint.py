@@ -31,6 +31,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 RATE_LIMIT = 2.5
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, HERE)
+
+from pipeline import sources  # noqa: E402
 CACHE = os.path.join(HERE, "cache", "fingerprints.json")
 
 BCMS_CHARS = set("čćšžđČĆŠŽĐ")
@@ -87,12 +90,7 @@ def main():
                     default=max(2, (os.cpu_count() or 4) - 2))
     args = ap.parse_args()
 
-    files = []
-    for root in args.root:
-     for dirpath, _, names in os.walk(root):
-        for n in sorted(names):
-            if n.lower().endswith((".mp3", ".m4a", ".flac", ".opus", ".ogg", ".wav")):
-                files.append(os.path.join(dirpath, n))
+    files = list(sources.walk(args.root))
     if args.limit:
         files = files[: args.limit]
 

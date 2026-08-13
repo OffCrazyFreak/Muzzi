@@ -34,6 +34,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
+
+from pipeline import sources  # noqa: E402
 CACHE = os.path.join(HERE, "cache", "analysis.json")
 FEATDIR = os.path.join(HERE, "features")
 AUDIT_TRUTH = os.path.join(HERE, "cache", "audit_truth.json")
@@ -656,25 +658,20 @@ def main():
         done = json.load(open(CACHE))
 
     todo = []
-    for root in args.root:
-     for dirpath, _, names in os.walk(root):
-        for n in sorted(names):
-            if not n.lower().endswith((".mp3", ".m4a", ".flac", ".opus", ".ogg", ".wav")):
-                continue
-            p = os.path.join(dirpath, n)
-            # Fall back to the path when no fingerprint exists, so analysis is
-            # never blocked on the fingerprint stage having run.
-            fp = fps.get(p, "path:" + p)
-            # Two files can share a fingerprint and still need separate
-            # entries: the same song downloaded into two source folders, or an
-            # mp3 and an m4a of one master. Keying on the fingerprint alone
-            # meant the second file had no analysis under its own path at all,
-            # so dedupe could not measure it, could not drop it, and shipped
-            # the song twice under two names.
-            if fp in done and done[fp].get("path") not in (None, p):
-                fp = fp + "|" + p
-            if fp not in done:
-                todo.append((p, fp))
+    for p in sources.walk(args.root):
+        # Fall back to the path when no fingerprint exists, so analysis is
+        # never blocked on the fingerprint stage having run.
+        fp = fps.get(p, "path:" + p)
+        # Two files can share a fingerprint and still need separate
+        # entries: the same song downloaded into two source folders, or an
+        # mp3 and an m4a of one master. Keying on the fingerprint alone
+        # meant the second file had no analysis under its own path at all,
+        # so dedupe could not measure it, could not drop it, and shipped
+        # the song twice under two names.
+        if fp in done and done[fp].get("path") not in (None, p):
+            fp = fp + "|" + p
+        if fp not in done:
+            todo.append((p, fp))
 
     if args.limit:
         todo = todo[: args.limit]

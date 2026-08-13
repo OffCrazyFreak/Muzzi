@@ -24,6 +24,11 @@ per-track identity the filename cannot give us.
 """
 import os
 import re
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from pipeline import sources  # noqa: E402
 
 import mutagen
 
@@ -148,16 +153,10 @@ def build(roots, cache_path=None):
     """Scan roots and return {path: seed}. Cheap: tag reads only."""
     import json
     seeds = {}
-    exts = (".mp3", ".m4a", ".flac", ".ogg", ".opus", ".wav")
-    for root in roots:
-        for dp, _, names in os.walk(root):
-            for n in sorted(names):
-                if not n.lower().endswith(exts):
-                    continue
-                p = os.path.join(dp, n)
-                s = extract(p)
-                if s:
-                    seeds[p] = s
+    for p in sources.walk(roots):
+        s = extract(p)
+        if s:
+            seeds[p] = s
     if cache_path:
         json.dump(seeds, open(cache_path + ".tmp", "w"),
                   ensure_ascii=False, indent=1)

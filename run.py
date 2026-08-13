@@ -43,6 +43,54 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 PY = os.path.join(HERE, ".venv", "bin", "python")
 BIN = os.path.join(HERE, "bin")
+sys.path.insert(0, HERE)
+
+from pipeline import sources  # noqa: E402
+# Where music goes when you would rather not type a path. Anything in here is
+# read-only to every stage, exactly like a folder named on the command line:
+# putting a folder in input/ changes where we look, never what we may write.
+INPUT = os.path.join(HERE, "input")
+
+
+def default_roots():
+    """-> the folders inside input/, symlinks resolved.
+
+    A symlink is the point rather than a concession. The library lives on
+    another partition and nobody should have to copy 8GB to run this, so
+    `ln -s /media/.../Music/Whatever input/Whatever` is the intended use. The
+    target is resolved here so that every stage downstream records the real
+    path: a cache keyed on input/Whatever/song.mp3 would go stale the moment
+    the link was renamed, and the entry would be unattributable.
+    """
+    if not os.path.isdir(INPUT):
+        return []
+    out, broken, loose = [], [], False
+    for name in sorted(os.listdir(INPUT)):
+        if name.startswith("."):
+            continue
+        here = os.path.join(INPUT, name)
+        p = os.path.realpath(here)
+        if os.path.isdir(p):
+            out.append(p)
+        elif os.path.isfile(p):
+            # Audio dropped straight into input/ rather than in a folder.
+            # Ignoring it silently is the failure this project has been bitten
+            # by most: nothing errors and the track is simply absent from the
+            # output. input/ itself becomes a root instead.
+            loose = loose or name.lower().endswith(sources.AUDIO)
+        else:
+            broken.append(name)
+    if broken:
+        # Almost always an unmounted partition, which is the exact setup this
+        # folder exists to support. Saying "input/ is empty" here, or worse
+        # running against the roots that did resolve, would process half a
+        # library and report success.
+        sys.exit("these entries in input/ point at nothing:\n  " +
+                 "\n  ".join(broken) +
+                 "\nIs the drive mounted? Remove them to run without.")
+    if loose:
+        out.append(INPUT)
+    return out
 
 
 def run_stage(name, cmd, results, quiet=False):
@@ -65,7 +113,8 @@ def run_stage(name, cmd, results, quiet=False):
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("root", nargs="+", help="folder(s) of music to process")
+    ap.add_argument("root", nargs="*", help="folder(s) of music to process; "
+                    "defaults to whatever is in input/")
     ap.add_argument("--skip", nargs="*", default=[], metavar="STAGE",
                     help="stage names to skip")
     ap.add_argument("--from", dest="start_at", metavar="STAGE",
@@ -73,6 +122,15 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("-j", "--workers", type=int)
     args = ap.parse_args()
+
+    if not args.root:
+        args.root = default_roots()
+        if not args.root:
+            sys.exit(f"nothing to do: {INPUT} is empty.\n"
+                     "Put your music folders in there (a symlink to each is "
+                     "enough), or name them on the command line.")
+        print(f"  reading {len(args.root)} folder(s) from "
+              f"{os.path.basename(INPUT)}/")
 
     for r in args.root:
         if not os.path.isdir(r):
