@@ -47,6 +47,11 @@ sys.path.insert(0, HERE)
 
 CACHE = os.path.join(HERE, "cache")
 
+# Stores that hold paths but are not JSON, so this tool cannot rewrite them.
+# Listed rather than ignored: silently skipping one is the failure mode this
+# whole tool exists to prevent, one file type over.
+OPAQUE = {".db", ".sqlite", ".sqlite3"}
+
 
 class KeyCollision(Exception):
     """Two cache keys would become one. Refused rather than merged."""
@@ -194,6 +199,20 @@ def main():
              if ".bak" not in os.path.basename(f)]
     if not files:
         sys.exit(f"no caches to rewrite in {CACHE}.")
+
+    # A store this tool cannot read is the one failure it cannot report by
+    # counting, because a store it never opened contributes zero and zero
+    # looks exactly like "no such paths in there". Anything path-keyed that
+    # is not JSON therefore stops the run rather than being walked past.
+    unknown = sorted(os.path.basename(f)
+                     for f in glob.glob(os.path.join(CACHE, "*"))
+                     if os.path.isfile(f)
+                     and os.path.splitext(f)[1].lower() in OPAQUE)
+    if unknown:
+        sys.exit("this cannot rewrite:\n  " + "\n  ".join(unknown) +
+                 "\nThey are keyed by path too, and leaving them behind "
+                 "orphans every row in them without anything reporting it. "
+                 "Teach this tool to read them, or move them aside first.")
 
     total, touched, totals = 0, [], [0] * len(pairs)
     pending = []
