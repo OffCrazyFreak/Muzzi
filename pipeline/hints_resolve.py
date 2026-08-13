@@ -79,23 +79,34 @@ _IN_GROUP_SEP = re.compile(r"[\s/,;:|.–—_+-]+")
 # the title. Recognised by the slogan itself, never by the pipe alone: a pipe
 # is legal in a name and the genre segment beside it is not evidence of
 # anything on its own.
+#
+# Every phrase here says something about licensing, which is what makes it a
+# channel slogan rather than words. A bare "Free Music" is deliberately not
+# one of them: it is ordinary enough to be part of a name, and a slogan that
+# means it always carries "copyright", "royalty" or the channel's own name.
+# The whole segment has to be the slogan, optionally after a short channel
+# name and a dash, so a title segment that merely contains the words survives.
 _SLOGAN = re.compile(
-    r"(?:copyright\s*free|no\s*copyright|ncs\s*release|royalty\s*free"
-    r"|free\s*(?:music|download)|ncs\s*-)", re.I)
+    r"^\s*(?:[^|]{1,24}?\s*[-–—]\s*)?"
+    r"(?:copyright[\s-]*free|no[\s-]*copyright|ncs[\s-]*release"
+    r"|royalty[\s-]*free|free[\s-]*download)"
+    r"(?:\s*(?:music|download|release))?\s*$", re.I)
 
 
 def _drop_slogan_tail(title):
     """-> the title with a pipe-separated uploader slogan removed.
 
-    Everything from the FIRST pipe is dropped, but only when some segment
+    Everything from the FIRST pipe is dropped, but only when a whole segment
     after it is a slogan. "Titsepoken 2015 | Electro | NCS - Copyright Free
     Music" keeps "Titsepoken 2015", including the year, which is part of that
-    track's real name.
+    track's real name. The genre segment goes with the slogan on purpose:
+    "Title | Genre | Slogan" is one uploader's naming scheme, and the genre
+    is no more part of the title than the slogan is.
     """
     parts = title.split("|")
     if len(parts) < 2:
         return title
-    if any(_SLOGAN.search(p) for p in parts[1:]):
+    if any(_SLOGAN.match(p) for p in parts[1:]):
         return parts[0]
     return title
 
