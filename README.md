@@ -934,6 +934,25 @@ question, never collapsed:
 ./.venv/bin/python tools/explain.py "Elitni Odredi" --field artist
 ```
 
+`cascade` fills it as it runs, and it records the answers that **lost** as well
+as the ones that won. That is not bookkeeping: a refusal is the disagreement.
+When `Facts.put` declines a value because a weaker source said something
+different, that refusal is the single most informative thing that happens in
+there, and it was the one thing nothing kept. Two catalogues agreeing and one
+catalogue answering alone leave identical entries in `cascade.json` once the
+loser has been dropped.
+
+```
+Alexandra Stan - Lemonade.mp3   field: album
+  Revelion Nostalgia 2025   deezer       [deezer]
+  Lemonade                  musicbrainz  [musicbrainz]
+cascade.json keeps only: 'Lemonade'
+```
+
+Deezer is answering with a compilation, which is the same substitution that
+made cover art collapse. The right album won here, and nothing recorded that
+there had been an argument.
+
 Agreement is counted in **independence families**, not in sources. The Cover
 Art Archive is MusicBrainz's own artwork store and AcoustID resolves to
 MusicBrainz recordings, so neither corroborates MusicBrainz; YouTube Music is
