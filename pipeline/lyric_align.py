@@ -53,6 +53,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
 from pipeline import lrc  # noqa: E402
+from pipeline import transcribe  # noqa: E402
 
 REVIEW = os.path.join(HERE, "cache", "review.json")
 LYRICS = os.path.join(HERE, "cache", "lyrics.json")
@@ -191,19 +192,25 @@ def align_one(task):
         # further is the single biggest cost here and buys nothing: every
         # anchor lies inside this window by construction.
         end = max(t for t, _ in cands) + LOOKAHEAD
-        segs, _ = model.transcribe(
-            path, beam_size=1, word_timestamps=True, vad_filter=True,
-            condition_on_previous_text=False,
-            vad_parameters={"min_silence_duration_ms": 400},
-            clip_timestamps=[0, end])
-        words = []
-        for seg in segs:
-            for w in (seg.words or []):
-                tok = norm_words(w.word)
-                if tok:
-                    words.append((float(w.start), tok[0]))
+        def collect(segs):
+            got = []
+            for seg in segs:
+                for w in (seg.words or []):
+                    tok = norm_words(w.word)
+                    if tok:
+                        got.append((float(w.start), tok[0]))
+            return got, len(got)
+
+        # The voice-activity filter hands Whisper silence on a lot of sung
+        # audio, and it does so worst on the half of this library it is
+        # hardest to identify anyway. transcribe.listen drops it and asks
+        # again when the answer is implausibly thin.
+        words, _info, used_vad = transcribe.listen(
+            model, path, collect, beam_size=1, word_timestamps=True,
+            condition_on_previous_text=False, clip_timestamps=[0, end])
         if len(words) < MIN_ANCHOR_WORDS:
-            return path, {"status": "nothing_transcribed", "offset": None}
+            return path, {"status": "nothing_transcribed", "offset": None,
+                          "vad": used_vad}
 
         # Best-scoring anchor wins, but each anchor is still located by its
         # own earliest acceptable window.
@@ -217,6 +224,10 @@ def align_one(task):
             lrc_t, anchor = cands[0]
 
         rec = {"confidence": round(score, 2),
+               # Whether the filter was kept. A run where many measurements
+               # needed it dropped is a run that would have measured nothing
+               # before, which is worth being able to count.
+               "vad": used_vad,
                "anchor": " ".join(anchor)[:60],
                "anchor_time": round(lrc_t, 2),
                "anchors_tried": len(cands)}
