@@ -48,6 +48,7 @@ import requests
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
+from pipeline import evidence  # noqa: E402
 from pipeline.identify import RateLimiter  # noqa: E402
 from pipeline.webmatch import fit, version_mismatch  # noqa: E402
 
@@ -129,7 +130,18 @@ def mb_get(ctx, url, params, fx=None, what=""):
 # ------------------------------------------------------------------ facts
 
 class Facts:
-    """A track's known fields, each with the source that established it."""
+    """A track's known fields, each with the source that established it.
+
+    `attempts` records every answer offered, including the ones refused. That
+    is not bookkeeping: a refusal is the disagreement. `put` returning False
+    because a weaker source said something different is the single most
+    informative thing that happens in here, and it was the one thing nothing
+    kept. Two catalogues agreeing and one catalogue answering alone leave
+    identical facts behind once the loser has been dropped on the floor.
+
+    Nothing here reads `attempts`. It changes no decision and no return value;
+    the winner is chosen exactly as before.
+    """
 
     def __init__(self, seed):
         self.f = {}
@@ -137,6 +149,11 @@ class Facts:
             if v not in (None, "", []):
                 self.f[k] = {"value": v, "source": "seed"}
         self.log = []
+        # (field, value, source, accepted, why, resolver)
+        self.attempts = []
+        # Set by run_track before each resolver fires, so an attempt can name
+        # the question it came from rather than only the answer.
+        self.resolver = None
 
     def get(self, key):
         e = self.f.get(key)
@@ -145,16 +162,29 @@ class Facts:
     def has(self, *keys):
         return all(self.get(k) is not None for k in keys)
 
+    def _note(self, key, value, source, accepted, why):
+        self.attempts.append((key, value, source, accepted, why,
+                              self.resolver))
+
     def put(self, key, value, source):
         if value in (None, "", []):
+            # Not recorded. "This source had nothing to say about this field"
+            # is not an answer about the track, and every resolver offers every
+            # field it might have found, so recording these would bury the real
+            # observations under a hundred empties per track.
             return False
         cur = self.f.get(key)
         if cur is not None:
             # Never let a weaker source rewrite a stronger one's answer.
             if TRUST.get(source, 0) <= TRUST.get(cur["source"], 0):
+                self._note(key, value, source, False,
+                           "agrees" if cur["value"] == value
+                           else f"outranked by {cur['source']}")
                 return False
             if cur["value"] == value:
+                self._note(key, value, source, False, "agrees")
                 return False
+        self._note(key, value, source, True, "accepted")
         self.f[key] = {"value": value, "source": source}
         self.log.append(f"{key}={value} <- {source}")
         return True
@@ -480,6 +510,46 @@ RESOLVERS = [
 ]
 
 
+def record_attempts(fx, path, seed, db=None):
+    """Write every answer this track was offered into the evidence store.
+
+    Called once per track rather than once per `put`, because a track makes
+    about thirty attempts and the store is happier with one transaction than
+    thirty. Failures are swallowed: the store is a record of what happened,
+    and a pipeline run must not be lost because writing the record failed.
+
+    The query key is the resolver plus the identity it was working from, so
+    asking the same resolver the same question again replaces its answer,
+    while asking it about a track whose name has since changed is a new
+    question and keeps both. That is the whole reason the store is keyed on
+    the question rather than on the field.
+    """
+    if not fx.attempts:
+        return 0
+    ident = f"{seed.get('artist')}|{seed.get('title')}"
+    try:
+        conn = evidence.connect(db or evidence.DB)
+    except Exception:                                     # pragma: no cover
+        return 0
+    n = 0
+    for field, value, source, _accepted, _why, resolver in fx.attempts:
+        try:
+            # Only what the source said. Whether it won is a conclusion about
+            # this track's other evidence, not a property of the observation,
+            # and it is derivable from the rows: a field with two values that
+            # disagree is the disagreement. Storing today's verdict alongside
+            # would be a conclusion written into a store whose whole point is
+            # that it holds none.
+            evidence.record(
+                conn, path, field, source,
+                query_key=f"cascade:{resolver or '?'}:{ident}",
+                state=evidence.FOUND, value=value)
+            n += 1
+        except Exception:                                 # pragma: no cover
+            continue
+    return n
+
+
 def seed_of(row):
     """The identity a cached entry was grown from."""
     return {"artist": row.get("proposed_artist"),
@@ -521,6 +591,7 @@ def run_track(seed, ctx, max_rounds):
                 continue
             before = dict(fx.f)
             fired.append((res.name, tuple(sorted(fx.f))))
+            fx.resolver = res.name
             try:
                 res.fn(fx, ctx)
             except Exception as e:
@@ -543,6 +614,10 @@ def main():
     ap.add_argument("--max-rounds", type=int, default=5)
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--workers", type=int)
+    ap.add_argument("--no-evidence", action="store_true",
+                    help="do not record what each source offered into "
+                         "cache/evidence.db. The store changes no decision "
+                         "here, so this is for isolating it while measuring")
     ap.add_argument("--only", metavar="PATHS",
                     help="a file of source paths, one per line: enrich only "
                          "these. For verifying a change against a frozen "
@@ -591,9 +666,17 @@ def main():
           f"{len(RESOLVERS)} resolvers ({len(cache)} cached)\n")
     lock, seen, t0 = threading.Lock(), {"n": 0}, time.time()
     gained = Counter()
+    ev = Counter()
 
     def work(r):
-        fx = run_track(seed_of(r), ctx, args.max_rounds)
+        seed = seed_of(r)
+        fx = run_track(seed, ctx, args.max_rounds)
+        if not args.no_evidence:
+            # Written from the worker thread. evidence.connect keeps one
+            # connection per thread, which is the arrangement this pool needs:
+            # a shared connection is the documented way to get "database is
+            # locked" under exactly this load.
+            ev["n"] += record_attempts(fx, r["path"], seed)
         return r, fx
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -626,6 +709,9 @@ def main():
     os.replace(OUT + ".tmp", OUT)
     n = max(seen["n"], 1)
     print(f"\n  {seen['n']} tracks in {time.time()-t0:.0f}s\n")
+    if ev["n"]:
+        print(f"  {ev['n']} observations recorded, including the answers that "
+              f"lost\n")
     print("  fields gained (not present in the seed):")
     for k, v in gained.most_common():
         print(f"    {k:20} {v:5}  ({100*v/n:3.0f}%)")
