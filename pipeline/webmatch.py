@@ -141,6 +141,17 @@ MIN_FIT = 0.5
 MAX_DURATION_DELTA = 2.0
 
 
+# How a foreign word gets written in Serbian and Croatian. Not typos: these
+# are the standard romanisations, so "Kawasaki" is filed as "Kavasaki" and
+# "Kompleksi" as "Komplexi". lyrics_fetch imports this to build the search
+# variants it asks catalogues for; it lives here so the questions and the
+# comparison that judges the answers cannot drift apart, which is exactly what
+# happened before: the query found the sheet under the other spelling and then
+# fit() refused it for not matching the spelling we asked with.
+_TRANSLIT = [("w", "v"), ("y", "j"), ("x", "ks"), ("qu", "kv"), ("ck", "k"),
+             ("ph", "f"), ("th", "t")]
+
+
 def norm(s):
     s = (s or "").lower().translate(_UNDECOMPOSED)
     s = unicodedata.normalize("NFKD", s)
@@ -148,17 +159,40 @@ def norm(s):
     return re.sub(r"[^a-z0-9]+", " ", s).strip()
 
 
-def fit(want, got):
-    """0..1 agreement between two names, diacritic- and punctuation-blind."""
-    w, g = norm(want), norm(got)
-    if not (w and g):
-        return 0.0
+def translit(s):
+    """-> the same normalised string romanised the Balkan way."""
+    for a, b in _TRANSLIT:
+        s = s.replace(a, b)
+    return s
+
+
+def _agree(w, g):
     if w == g:
         return 1.0
     if w in g or g in w:
         return 0.85
     ws, gs = set(w.split()), set(g.split())
     return len(ws & gs) / max(len(ws | gs), 1)
+
+
+def fit(want, got):
+    """0..1 agreement between two names, diacritic- and punctuation-blind.
+
+    A second pass romanises both sides, but only when the first pass already
+    says these are different names. Applied that way it can rescue a match and
+    can never lower one, which matters because every caller that draws a line
+    draws it here: raising a score is one more sheet kept, lowering one would
+    silently change identity decisions across the pipeline.
+    """
+    w, g = norm(want), norm(got)
+    if not (w and g):
+        return 0.0
+    score = _agree(w, g)
+    if score < MIN_FIT:
+        tw, tg = translit(w), translit(g)
+        if (tw, tg) != (w, g):
+            score = max(score, _agree(tw, tg))
+    return score
 
 
 def confirms(cand, artist, title):
