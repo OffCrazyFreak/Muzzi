@@ -60,6 +60,11 @@ ARTIST_SPLIT = re.compile(
     r"|\s+i\s+")
 
 
+# A separator left behind at either end of a split part, plus the whitespace
+# around it. Not "." or "/": will.i.am and AC/DC are names.
+_ORPHAN_SEP = re.compile(r"^[\s&,;+]+|[\s&,;+]+$")
+
+
 def split_credit(credit):
     """-> every artist named in a credit string, in order.
 
@@ -67,7 +72,12 @@ def split_credit(credit):
     every caller splits the credit before looking anything up, so the
     generators that learn rules from the library have to split it too.
     """
-    return [p.strip() for p in ARTIST_SPLIT.split(credit or "") if p.strip()]
+    # Splitting on one separator can leave another stranded at the edge of the
+    # next part: "DJ Denial X & SHA" splits on " X " and hands back "& SHA",
+    # an artist whose name begins with an ampersand. Nothing here is ever a
+    # name, so strip it from both ends.
+    return [p for p in (_ORPHAN_SEP.sub("", p) for p in
+                        ARTIST_SPLIT.split(credit or "")) if p]
 
 
 def lead_of(credit):
