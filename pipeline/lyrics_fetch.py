@@ -30,6 +30,13 @@ import threading
 import time
 import unicodedata
 
+# Before the first `from pipeline...` below, not after it. Every other module
+# here does the insert first; this one did not, so it imported successfully
+# only when the current directory happened to be the repository root. That is
+# also how a worktree could import the main checkout's package instead of its
+# own, and test the wrong code without saying so.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 # LRCLIB is a free, donation-funded community service with no published limit.
 # Two per second is brisk enough to finish 3000 tracks in ~25 minutes and light
 # enough not to be rude.
@@ -53,7 +60,6 @@ from pipeline.webmatch import MIN_FIT  # noqa: F401  re-exported
 #      and artist_fit/title_fit stamped on every entry.
 SELECTOR = 2
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # _UNDECOMPOSED is shared rather than copied: a query variant that folded a
 # letter differently from the comparison that judges the answer would ask for
 # one spelling and then reject what came back.
