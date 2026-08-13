@@ -11,6 +11,13 @@ So: move the files, then rewrite the keys. Every string anywhere in every
 cache that begins with an old folder is rewritten to begin with the new one,
 whether it is a dict key, a value, or buried in a list.
 
+`cache/evidence.db` is keyed by path too, and is rewritten in the same run.
+The rewriting lives in `pipeline/evidence.py`, with the schema, so this tool
+does not carry a second description of that table for the two to drift apart.
+Any other `.db` or `.sqlite` in `cache/` still stops the run rather than being
+walked past, because a store this tool never opened contributes zero and zero
+is indistinguishable from "no such paths in there".
+
 `hints.tsv` needs nothing. It is keyed by filename, so every answer you have
 ever given survives a move on its own.
 
@@ -45,12 +52,20 @@ import sys
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
+from pipeline import evidence  # noqa: E402
+
 CACHE = os.path.join(HERE, "cache")
 
-# Stores that hold paths but are not JSON, so this tool cannot rewrite them.
-# Listed rather than ignored: silently skipping one is the failure mode this
-# whole tool exists to prevent, one file type over.
+# Stores that hold paths but are not JSON. Listed rather than ignored:
+# silently skipping one is the failure mode this whole tool exists to prevent,
+# one file type over.
 OPAQUE = {".db", ".sqlite", ".sqlite3"}
+
+# The ones it now knows how to rewrite. The rewriting itself lives with the
+# schema, in pipeline/evidence.py, rather than here: a second description of
+# that table in this file is a second thing to keep in step, and the version
+# that drifts is the one nobody notices until a move has already happened.
+KNOWN = {evidence.DB_NAME: evidence}
 
 
 class KeyCollision(Exception):
@@ -203,13 +218,19 @@ def main():
     # A store this tool cannot read is the one failure it cannot report by
     # counting, because a store it never opened contributes zero and zero
     # looks exactly like "no such paths in there". Anything path-keyed that
-    # is not JSON therefore stops the run rather than being walked past.
-    unknown = sorted(os.path.basename(f)
-                     for f in glob.glob(os.path.join(CACHE, "*"))
-                     if os.path.isfile(f)
-                     and os.path.splitext(f)[1].lower() in OPAQUE)
+    # is not JSON and is not known therefore stops the run rather than being
+    # walked past.
+    stores, unknown = [], []
+    for f in sorted(glob.glob(os.path.join(CACHE, "*"))):
+        if not os.path.isfile(f) or ".bak" in os.path.basename(f):
+            continue
+        if os.path.splitext(f)[1].lower() not in OPAQUE:
+            continue
+        owner = KNOWN.get(os.path.basename(f))
+        (stores.append((f, owner)) if owner else
+         unknown.append(os.path.basename(f)))
     if unknown:
-        sys.exit("this cannot rewrite:\n  " + "\n  ".join(unknown) +
+        sys.exit("this cannot rewrite:\n  " + "\n  ".join(sorted(unknown)) +
                  "\nThey are keyed by path too, and leaving them behind "
                  "orphans every row in them without anything reporting it. "
                  "Teach this tool to read them, or move them aside first.")
@@ -234,10 +255,40 @@ def main():
         if not count[0]:
             continue
         total += count[0]
-        touched.append((name, count[0]))
+        touched.append((name, f"{count[0]:6} strings"))
         pending.append((path, new_data))
 
+    # Planned in the same pass as the caches and applied in the same block, so
+    # a refusal cannot leave the JSON pointing at the new layout while the
+    # store still points at the old one. Half relocated is worse than not
+    # relocated, because it looks finished.
+    store_plans = []
+    for path, owner in stores:
+        conn = owner.connect(path)
+        try:
+            moves = owner.plan_relocation(conn, lambda s: rewrite(s, pairs))
+        except owner.Collision as e:
+            sys.exit(f"{os.path.basename(path)}: {e}\nNothing was written.")
+        if not moves:
+            continue
+        rows = sum(conn.execute(
+            f"SELECT COUNT(*) FROM {owner.TABLE} "
+            f"WHERE {owner.PATH_COLUMN} = ?", (old,)).fetchone()[0]
+            for old, _ in moves)
+        for old, _ in moves:
+            for i, (o, _) in enumerate(pairs):
+                if old == o or old.startswith(o + os.sep):
+                    totals[i] += 1
+                    break
+        total += len(moves)
+        touched.append((os.path.basename(path),
+                        f"{len(moves):6} tracks ({rows} rows)"))
+        store_plans.append((path, owner, conn, moves))
+
     if args.apply:
+        for path, owner, conn, moves in store_plans:
+            owner.apply_relocation(conn, moves,
+                                   backup_to=path + ".bak-relocate")
         for path, new_data in pending:
             # The backup is refreshed every run, not written once: it exists
             # to undo the run being made now, and keeping the first one
@@ -251,7 +302,7 @@ def main():
             os.replace(tmp, path)
 
     for name, n in touched:
-        print(f"  {name:26} {n:6} strings")
+        print(f"  {name:26} {n}")
     verb = "rewritten" if args.apply else "would be rewritten"
     print(f"\n  {total} strings across {len(touched)} caches {verb}")
     # Per pair, because one misspelled OLD among several otherwise passes as

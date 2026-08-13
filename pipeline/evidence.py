@@ -56,7 +56,13 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
 CACHE = os.path.join(HERE, "cache")
-DB = os.path.join(CACHE, "evidence.db")
+# Named separately because tools/relocate.py has to recognise this file among
+# the other caches, and a second spelling of it there would be a spelling that
+# can drift.
+DB_NAME = "evidence.db"
+DB = os.path.join(CACHE, DB_NAME)
+TABLE = "observation"
+PATH_COLUMN = "track_path"
 
 # What a source can have answered. A typo would otherwise create a ninth state
 # that no reader matches and no reader reports, so the column is constrained
@@ -344,6 +350,75 @@ def asked(conn, track_path, field, source, query_key):
             WHERE track_path=? AND field=? AND source=? AND query_key=?""",
         (track_path, field, source, query_key)).fetchone()
     return row if (row is not None and fresh(row)) else None
+
+
+# ----------------------------------------------------------------- relocating
+
+class Collision(Exception):
+    """Two tracks would become one. Refused rather than merged."""
+
+    def __init__(self, a, b, new):
+        super().__init__(f"{a!r} and {b!r} would both become {new!r}")
+
+
+def plan_relocation(conn, rewrite):
+    """-> [(old path, new path), ...] for a move, without touching anything.
+
+    `rewrite` is the caller's prefix rule, taking a path and returning
+    `(new, matched)`. Kept as a callback rather than reimplemented here so that
+    the boundary matching, the longest-prefix ordering and every refusal
+    tools/relocate.py already validates apply to this store identically. Two
+    implementations of "did this path move" would eventually disagree, and the
+    disagreement would look like a store that was simply missing some tracks.
+
+    A collision is refused for the same reason the JSON walk refuses one:
+    merging two tracks' evidence is a decision about which recording is which,
+    not a mechanical rewrite, and last-wins would drop rows while the run still
+    reported success.
+    """
+    paths = [r[0] for r in conn.execute(
+        f"SELECT DISTINCT {PATH_COLUMN} FROM {TABLE}").fetchall()]
+    moves, landing = [], {}
+    unmoved = set(paths)
+    for old in paths:
+        new, hit = rewrite(old)
+        if not hit:
+            continue
+        if new in landing:
+            raise Collision(landing[new], old, new)
+        landing[new] = old
+        moves.append((old, new))
+        unmoved.discard(old)
+    # A path that did not move but is already sitting where a moved one is
+    # headed is the same collision, one step removed.
+    for new, old in landing.items():
+        if new in unmoved:
+            raise Collision(new, old, new)
+    return moves
+
+
+def apply_relocation(conn, moves, backup_to=None):
+    """Rewrite the moved paths. -> the number of rows changed.
+
+    Checkpointed before the backup on purpose: in WAL mode the newest rows can
+    be sitting in `evidence.db-wal` rather than in `evidence.db`, so copying
+    the one file without folding the log in first backs up a database that is
+    missing exactly the work most likely to matter.
+    """
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    if backup_to:
+        import shutil
+        shutil.copy2(conn.execute("PRAGMA database_list").fetchone()[2],
+                     backup_to)
+    changed = 0
+    with conn:
+        conn.execute("BEGIN IMMEDIATE")
+        for old, new in moves:
+            cur = conn.execute(
+                f"UPDATE {TABLE} SET {PATH_COLUMN} = ? WHERE {PATH_COLUMN} = ?",
+                (new, old))
+            changed += cur.rowcount
+    return changed
 
 
 # ------------------------------------------------------------------ backfill
