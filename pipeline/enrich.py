@@ -15,6 +15,7 @@ Both are network-bound and cache to disk, so re-runs cost nothing.
 Usage: enrich.py [--limit N] [-j workers]
 """
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -32,6 +33,7 @@ ARTDIR = os.path.join(HERE, "cache", "art")
 OUT = os.path.join(HERE, "cache", "enrich.json")
 
 from pipeline.useragent import UA  # noqa: E402
+from pipeline.webmatch import fit  # noqa: E402
 CAA = "https://coverartarchive.org/release-group/{}/front-500"
 ITUNES = "https://itunes.apple.com/search"
 DEEZER = "https://api.deezer.com/search"
@@ -79,8 +81,50 @@ def art_sanity(data):
         return {"problems": [f"undecodable: {type(e).__name__}"]}
 
 
+# How many search hits to look at before giving up. One was too few: the top
+# hit was taken unchecked, so whatever the catalogue put first became the
+# cover. Looking at several costs the same single request and lets a wrong
+# first result be passed over rather than embedded.
+ART_HITS = 5
+
+# The bar a hit has to clear on artist AND on the record it came from. Same
+# 0.6 cascade.r_deezer_search already uses, for the same reason.
+MIN_ART_FIT = 0.6
+
+
+def art_fits(artist, album, title, cand_artist, cand_album, cand_title):
+    """-> True when this hit is plausibly the same record as ours.
+
+    Two checks, because the failure needs both. The artist check stops a broken
+    identity walking straight through: the query actually issued for
+    `CVIJA X TEODORA - NOKAUT` was `Lyrics Video Cvija feat. Teodora NOKAUT /`
+    with the artist read as `Lyrics Video`, and with nothing compared, its first
+    hit was embedded and shared with an unrelated Rasta track.
+
+    The record check is what stops one image spreading across an artist. The
+    query is built from `album or title`, so every track sharing an album tag
+    issues the identical query and gets the identical cover: nine Ivan Zak
+    files on one image, seven Grše files on another. That is correct when the
+    album tag is right and is how album art is supposed to work, so the fix is
+    not to vary the query, it is to check that what came back is that album.
+    """
+    if fit(artist, cand_artist) < MIN_ART_FIT:
+        return False
+    want = album or title
+    # Compared against the album when we asked for an album, and against either
+    # when we asked for a title: a single is frequently filed under its own
+    # name, so demanding an album match there would reject the right sleeve.
+    got = [cand_album] if album else [cand_album, cand_title]
+    return any(fit(want, g) >= MIN_ART_FIT for g in got if g)
+
+
 def fetch_art(row, session):
-    """Cover Art Archive by release-group, then iTunes, then Deezer."""
+    """Cover Art Archive by release-group, then iTunes, then Deezer.
+
+    Cover Art Archive is keyed to a release MBID and needs no checking. The
+    other two are TEXT SEARCHES and can return a different record entirely,
+    which `ART_TRUST` has always said in a comment while nothing acted on it.
+    """
     rgid = row.get("release_group_id")
     artist, title = row.get("proposed_artist"), row.get("proposed_title")
     album = row.get("proposed_album")
@@ -94,13 +138,19 @@ def fetch_art(row, session):
         except Exception:
             pass
     q = f"{artist} {album or title}".strip()
-    if not q:
+    if not (q and artist):
         return None, None
     try:
-        r = session.get(ITUNES, params={"term": q, "entity": "song", "limit": 1},
-                        timeout=30)
-        res = (r.json().get("results") or [None])[0] if r.status_code == 200 else None
-        if res and res.get("artworkUrl100"):
+        r = session.get(ITUNES,
+                        params={"term": q, "entity": "song",
+                                "limit": ART_HITS}, timeout=30)
+        hits = (r.json().get("results") or []) if r.status_code == 200 else []
+        for res in hits:
+            if not res.get("artworkUrl100"):
+                continue
+            if not art_fits(artist, album, title, res.get("artistName"),
+                            res.get("collectionName"), res.get("trackName")):
+                continue
             # iTunes serves any size by substituting the dimensions in the URL.
             url = res["artworkUrl100"].replace("100x100", "600x600")
             img = session.get(url, timeout=30)
@@ -109,10 +159,17 @@ def fetch_art(row, session):
     except Exception:
         pass
     try:
-        r = session.get(DEEZER, params={"q": q, "limit": 1}, timeout=30)
-        res = (r.json().get("data") or [None])[0] if r.status_code == 200 else None
-        cover = (res or {}).get("album", {}).get("cover_xl")
-        if cover:
+        r = session.get(DEEZER, params={"q": q, "limit": ART_HITS}, timeout=30)
+        hits = (r.json().get("data") or []) if r.status_code == 200 else []
+        for res in hits:
+            cover = (res.get("album") or {}).get("cover_xl")
+            if not cover:
+                continue
+            if not art_fits(artist, album, title,
+                            (res.get("artist") or {}).get("name"),
+                            (res.get("album") or {}).get("title"),
+                            res.get("title")):
+                continue
             img = session.get(cover, timeout=30)
             if img.status_code == 200 and len(img.content) > 5000:
                 return img.content, "deezer"
@@ -187,9 +244,18 @@ def main():
         rec = {"path": r["path"], "file": r["file"]}
         img, src = fetch_art(r, session)
         if img:
-            # Name art by fingerprint-independent key: the output filename may
-            # change, but the source path will not within a run.
-            h = str(abs(hash(r["path"])))[:16]
+            # Name art by a key that does not depend on the output filename,
+            # which changes, but does depend on the source path, which does
+            # not.
+            #
+            # blake2s rather than hash(): Python salts hash() on str per
+            # process, so the same track was named differently on every run and
+            # cache/art/ accumulated a fresh copy of every image each time.
+            # Measured before this: 3563 files and 362 MB against roughly 1700
+            # actually referenced. The old names cannot be recomputed, so this
+            # does not clean them up; it stops them being made.
+            h = hashlib.blake2s(r["path"].encode("utf-8"),
+                                digest_size=8).hexdigest()
             p = os.path.join(ARTDIR, f"{h}.jpg")
             with open(p, "wb") as fh:
                 fh.write(img)
