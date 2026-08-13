@@ -710,7 +710,8 @@ session teardown kills it mid-run.
 ```
 run.py                  the only entry point you need
 pipeline/               one file per stage, each runnable alone
-tools/                  standalone helpers (sample, snapshot, snapdiff)
+tools/                  standalone helpers (sample, snapshot, snapdiff,
+                        relocate)
 config/                 keys and hand-maintained corrections
 cache/                  every stage's output; safe to delete, expensive to rebuild
 out/_all                the result
@@ -758,6 +759,21 @@ $P tools/snapshot.py --issue m4a-genres --label before
 $P tools/snapshot.py --issue m4a-genres --label after
 $P tools/snapdiff.py --issue m4a-genres --by-cohort
 ```
+
+`relocate.py` is for after you move your music. Fourteen caches are keyed by
+absolute path, two of them hours of Whisper apiece, so a move without it
+rebuilds all of that in silence: a cache miss is not an error, the stage
+simply does the work again.
+
+```bash
+$P tools/relocate.py "/old/Music Mine=/new/Music Mine"          # reports
+$P tools/relocate.py "/old/Music Mine=/new/Music Mine" --apply
+```
+
+`hints.tsv` needs nothing, being keyed by filename. `fingerprints.json` keys
+on `path|size|mtime`, so use a move that preserves the modification time
+(`mv` and `rsync -a` both do) and check that `fingerprint` then reports
+everything cached.
 
 `snapdiff.py` sorts every difference into **fixed** (declared and changed),
 **missed** (declared and unchanged, so the fix did nothing), **collateral**

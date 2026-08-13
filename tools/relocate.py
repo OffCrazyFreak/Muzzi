@@ -21,8 +21,15 @@ through a file manager may not. Check that `fingerprint` reports everything
 cached afterwards, not just that this tool reported a number.
 
 Matching is at a path boundary, so "Music Mine" never matches "Music Mine 2",
-and each string is rewritten at most once, longest prefix first, so a nested
-pair cannot be applied twice.
+and each string is rewritten at most once, longest prefix first.
+
+One pass applying at most one pair is provably the whole job, which is what
+makes a second run a no-op: afterwards no string starts with any OLD. Keeping
+that true is why the pairs are validated rather than merely sorted. A
+destination inside its own source, two pairs whose paths overlap, and the
+same source given twice are each refused, because none of them can be
+expressed in one pass and all three produce paths belonging to no layout at
+all while reporting healthy counts.
 
 Usage:
   tools/relocate.py "/old/path=/new/path" ["/other/old=/other/new" ...]
@@ -44,9 +51,8 @@ CACHE = os.path.join(HERE, "cache")
 class KeyCollision(Exception):
     """Two cache keys would become one. Refused rather than merged."""
 
-    def __init__(self, old, new):
-        super().__init__(f"two entries both become {new!r}, one of them "
-                         f"was {old!r}")
+    def __init__(self, a, b, new):
+        super().__init__(f"{a!r} and {b!r} would both become {new!r}")
 
 
 def rewrite(s, pairs):
@@ -57,14 +63,6 @@ def rewrite(s, pairs):
     `.../Music Mine 2`, which is a different folder.
     """
     for old, new in pairs:
-        # Already where THIS pair would put it, so this pair is done with it.
-        # `continue`, not `return`: another pair may still legitimately match,
-        # and returning here left a string under one pair's destination
-        # untouched by every later rule. Without the check at all, a
-        # destination nested under its own source ("/a" -> "/a/moved") grows a
-        # segment on every run: /a/moved/moved/x.
-        if s == new or s.startswith(new + os.sep):
-            continue
         if s == old:
             return new, True
         if s.startswith(old + os.sep):
@@ -96,7 +94,14 @@ def walk(node, pairs, count, per):
         for k, v in node.items():
             nk = walk(k, pairs, count, per)
             if nk in out:
-                raise KeyCollision(k, nk)
+                # Both originals, not just the second one. In the common
+                # ordering the pre-move entry comes first and the post-move
+                # entry is appended later, so naming only the key being
+                # processed printed the same path on both sides and
+                # identified nothing.
+                first = next(o for o in node if walk(o, pairs, [0],
+                                                     [0] * len(pairs)) == nk)
+                raise KeyCollision(first, k, nk)
             out[nk] = walk(v, pairs, count, per)
         return out
     return node
@@ -132,20 +137,41 @@ def main():
     # string the outer pair has already rewritten.
     pairs.sort(key=lambda p: len(p[0]), reverse=True)
 
-    # A chain, where one pair's destination is another pair's source, cannot
-    # be expressed as a single pass: /a=/b/x with /b=/c rewrites a file to
-    # /b/x/song.mp3, a path in neither the old layout nor the new one, and
-    # both pairs report a healthy count while doing it. Refused rather than
-    # ordered, because "which of these did you mean" is not ours to guess.
+    # Everything below exists so that one pass over each string, applying at
+    # most one pair, is provably the whole job. That is what makes a second
+    # run a no-op: after a move, no string starts with any OLD any more.
     def under(a, b):
         return a == b or a.startswith(b + os.sep)
 
+    seen = {}
+    for old_p, new_p in pairs:
+        # The destination inside the source is the one shape a single pass
+        # cannot express: the rewritten string still starts with OLD, so a
+        # second run moves it again, /a/moved/moved/x. Moving a folder UP a
+        # level is fine and stays allowed, because the result no longer
+        # matches OLD.
+        if under(new_p, old_p) and new_p != old_p:
+            sys.exit(f"the destination is inside the source:\n  {old_p}\n"
+                     f"  -> {new_p}\nMove it somewhere outside, or do it in "
+                     f"two steps.")
+        if old_p in seen:
+            sys.exit(f"{old_p} is given twice, moving to {seen[old_p]} and "
+                     f"to {new_p}. Only one can happen.")
+        seen[old_p] = new_p
+
+    # A chain, where one pair's destination overlaps another pair's source in
+    # either direction, cannot be expressed as one pass either: /m/a/b=/m
+    # with /m/a=/z sends a file to /z/b/song.mp3, a path in neither layout,
+    # and both pairs report a healthy count while doing it. Refused rather
+    # than ordered, because "which did you mean" is not ours to guess.
     for old_a, new_a in pairs:
         for old_b, _ in pairs:
-            if old_a != old_b and under(new_a, old_b):
-                sys.exit(f"these two chain: {old_a} moves into {new_a}, which "
-                         f"{old_b} then moves again.\nRun them one at a time, "
-                         f"or give the final destination for each.")
+            if old_a == old_b:
+                continue
+            if under(new_a, old_b) or under(old_b, new_a):
+                sys.exit(f"these two overlap: {old_a} moves into {new_a}, "
+                         f"which sits across {old_b}.\nRun them one at a "
+                         f"time, or give the final destination for each.")
 
     for old, new in pairs:
         if args.apply and not os.path.isdir(new):
@@ -157,12 +183,22 @@ def main():
     # discovered halfway through: exiting on a collision in the eleventh
     # cache after replacing ten of them leaves cache/ half relocated, and the
     # message saying nothing was written would be a lie.
+    # cache/ exists only in the main checkout, so running a worktree's copy
+    # would otherwise print "0 strings across 0 caches" and exit 0, which
+    # reads as "those paths are not in your caches" rather than "I looked in
+    # the wrong place".
+    if not os.path.isdir(CACHE):
+        sys.exit(f"no cache folder at {CACHE}. Run the copy in the checkout "
+                 f"that owns the caches.")
+    files = [f for f in sorted(glob.glob(os.path.join(CACHE, "*.json")))
+             if ".bak" not in os.path.basename(f)]
+    if not files:
+        sys.exit(f"no caches to rewrite in {CACHE}.")
+
     total, touched, totals = 0, [], [0] * len(pairs)
     pending = []
-    for path in sorted(glob.glob(os.path.join(CACHE, "*.json"))):
+    for path in files:
         name = os.path.basename(path)
-        if ".bak" in name:
-            continue
         try:
             with open(path, encoding="utf-8") as fh:
                 data = json.load(fh)
