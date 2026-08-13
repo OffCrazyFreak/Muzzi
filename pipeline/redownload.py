@@ -48,6 +48,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -70,6 +71,17 @@ MIN_GAIN_HZ = 1200
 # Seconds the new file may differ from the old before it is a different cut.
 MAX_DRIFT = 8.0
 MIN_BYTES = 200_000
+
+
+def _done_key(path, args):
+    """Where an attempt is recorded in the shared report.
+
+    The two modes ask different questions about the same path, so they cannot
+    share a completion key: a file this tool once judged for its bandwidth is
+    exactly the file that may later go missing, and it would then be skipped
+    forever as "already attempted".
+    """
+    return f"missing:{path}" if getattr(args, "missing", False) else path
 
 
 def _ytmusic():
@@ -152,12 +164,19 @@ def download(vid, dest_stem, cookies=None):
     # the server updates a cookie. Eight workers sharing one file rewrote it
     # under each other until it stopped being a cookie file at all, and every
     # download after that failed with "does not look like Netscape format".
+    # mkstemp, not a name derived from the path: it is created 0600 and it is
+    # unique, so a second process cannot land on the same jar and another
+    # local account cannot read a browser session out of the staging
+    # directory.
     jar = None
     if cookies:
-        jar = dest_stem + ".cookies.txt"
         try:
-            shutil.copyfile(cookies, jar)
+            fd, jar = tempfile.mkstemp(dir=STAGE_DIR, suffix=".cookies.txt")
+            with open(cookies, "rb") as fh, os.fdopen(fd, "wb") as out:
+                shutil.copyfileobj(fh, out)
         except OSError:
+            if jar and os.path.exists(jar):
+                os.remove(jar)
             jar = None
     auth = ["--cookies", jar] if jar else []
     try:
@@ -285,9 +304,18 @@ def judge(res, an, args):
         if os.path.exists(dst):
             return drop("rejected", "a file is already back at that path")
         shutil.move(got, dst)
-        return {"file": res["file"], "status": "restored",
+        # YouTube serves m4a, so a row that named a .mp3 gets its audio back
+        # under a different extension. That is a real restoration of the
+        # music and NOT a restoration of the path: review.json still points
+        # at a file that does not exist, and write_tags still errors on it,
+        # until fingerprint, analyze and review have re-read the folder.
+        # Reported separately so the summary cannot be read as "done".
+        same_path = dst == src
+        return {"file": res["file"],
+                "status": "restored" if same_path else "restored elsewhere",
                 "video_id": res["video_id"], "how": res["how"],
-                "new_cutoff": round(new_cut), "path": dst}
+                "new_cutoff": round(new_cut), "path": dst,
+                "was": None if same_path else src}
 
     if new_cut < old_cut + args.min_gain:
         return drop("not better", f"{new_cut:.0f}Hz vs {old_cut:.0f}Hz")
@@ -345,11 +373,25 @@ def main():
         # A deleted source keeps erroring in write_tags on every run, and
         # those errors self-disable --prune, so stale output can never be
         # cleaned automatically until the file is back.
+        # Keyed apart from the quality mode. done is shared, so a path this
+        # tool once looked at for its bandwidth would otherwise be skipped
+        # here forever, and that is exactly a file that has since gone.
+        no_length = 0
         for path, row in rows.items():
-            if os.path.exists(path) or path in done:
+            if os.path.exists(path) or f"missing:{path}" in done:
                 continue
-            todo.append((path, row, analysis.get(path, {})))
+            an = analysis.get(path) or {}
+            if not (an.get("decoded_secs") or 0) > 0:
+                # The recorded length is the ONLY thing standing between this
+                # and a different recording taking the missing one's place.
+                # Without it there is no check left, so do not download.
+                no_length += 1
+                continue
+            todo.append((path, row, an))
         todo.sort(key=lambda x: x[0])
+        if no_length:
+            print(f"  {no_length} skipped: no measured length to check a "
+                  f"replacement against")
     else:
         for path, an in analysis.items():
             cut = an.get("spectral_cutoff_hz") or 0
@@ -396,8 +438,9 @@ def main():
           f"batches of {args.batch}\n")
 
     lock = threading.Lock()
-    stats = {"kept": 0, "restored": 0, "not better": 0, "rejected": 0,
-             "download failed": 0, "no source": 0}
+    stats = {"kept": 0, "restored": 0, "restored elsewhere": 0,
+             "not better": 0, "rejected": 0, "download failed": 0,
+             "no source": 0}
     t0 = time.time()
 
     for start in range(0, len(todo), args.batch):
@@ -425,7 +468,7 @@ def main():
                     fetched.append(res)
                 else:
                     with lock:
-                        done[p] = res
+                        done[_done_key(p, args)] = res
                         stats[res["status"]] = stats.get(res["status"], 0) + 1
 
         # Phase 2: measure, in separate processes.
@@ -443,19 +486,20 @@ def main():
         for r in fetched:
             res = judge(r, analysis.get(r["path"], {}), args)
             with lock:
-                done[r["path"]] = res
+                done[_done_key(r["path"], args)] = res
                 stats[res["status"]] = stats.get(res["status"], 0) + 1
                 if res["status"] == "kept":
                     print(f"    KEPT  +{res['gain']:>5}Hz  "
                           f"{res['old_cutoff']:>5}->{res['new_cutoff']:<5} "
                           f"{res['file'][:44]}", flush=True)
-                elif res["status"] == "restored":
+                elif res["status"].startswith("restored"):
                     print(f"    BACK  {res['new_cutoff']:>5}Hz  "
                           f"{res['how'][:20]:20} {res['file'][:44]}",
                           flush=True)
         json.dump(done, open(REPORT + ".tmp", "w"), ensure_ascii=False, indent=1)
         os.replace(REPORT + ".tmp", REPORT)
-        got = (f"restored {stats['restored']}" if args.missing
+        got = (f"restored {stats['restored'] + stats['restored elsewhere']}"
+               if args.missing
                else f"kept {stats['kept']}, not better {stats['not better']}")
         print(f"      {got}, failed {stats['download failed']}", flush=True)
 
@@ -464,8 +508,12 @@ def main():
     for k, v in sorted(stats.items(), key=lambda x: -x[1]):
         print(f"    {k:18} {v}")
     if args.missing:
-        print(f"\n  {stats['restored']} sources back where they were.")
-        print("  Re-run fingerprint and analyze over them, then review, "
+        moved = stats["restored elsewhere"]
+        print(f"\n  {stats['restored']} sources back at their own path.")
+        if moved:
+            print(f"  {moved} back under a different extension, because "
+                  f"YouTube serves m4a. Those rows still read as missing.")
+        print("  Re-run fingerprint and analyze over the folder, then review, "
               "before write_tags --prune.\n")
     else:
         print(f"\n  better files -> {OUT_DIR}")
