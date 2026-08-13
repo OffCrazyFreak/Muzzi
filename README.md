@@ -50,6 +50,9 @@ That is why:
   Poweramp and anything else that ignores relative ones.
 - Filenames come out as `Artist - Title (ft. Other) [131 BPM].mp3`. The BPM is
   in the name because Samsung Music has no BPM field and won't show the tag.
+  A feature marker is only read as one when it starts a word, so `Thrift Shop`
+  and `Defeat The Night` keep their titles instead of losing them to an
+  invented artist called `Shop`. Each performer is credited once.
 - Lyrics are written twice: embedded (Namida and most players read this) and as
   a `.lrc` sidecar (Samsung Music reads **only** sidecars).
 - A sheet has to be the right song *and* the right edit. Lyrics whose artist or

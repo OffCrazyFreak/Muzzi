@@ -428,8 +428,14 @@ def safe_name(s, fallback="Unknown"):
 # ("Ivana Selakov i Aca Lukas" is two artists; an upper-case "I" is far likelier
 # to be part of a name).
 _ARTIST_SPLIT = artist_names.ARTIST_SPLIT
+# The marker has to start a word. Without the leading boundary the prefix is
+# entirely optional, so the match can begin at the final "ft" of an ordinary
+# word: "Defeat The Night" became "De (ft. The Night)", "Thrift Shop" became
+# "Thri (ft. Shop)", and the invented artist reached TPE1, where it groups and
+# searches like a real one. Gift, Soft, Left and Minecraft do the same.
 _FEAT_IN_TITLE = re.compile(
-    r"\s*[\(\[]?\s*(?:feat\.?|ft\.?|featuring)\s+([^)\]]+?)\s*[\)\]]?\s*$", re.I)
+    r"(?:^|[\s\(\[])\s*[\(\[]?\s*(?:feat\.?|ft\.?|featuring)\s+"
+    r"([^)\]]+?)\s*[\)\]]?\s*$", re.I)
 
 
 def split_credits(artist, title):
@@ -448,7 +454,16 @@ def split_credits(artist, title):
     for p in parts[1:]:
         if p.lower() not in {f.lower() for f in feats}:
             feats.append(p)
-    return lead, feats, title
+    # One credit per person. "Cher Lloyd ft. Cher Lloyd" and two spellings of
+    # one name both reached the title, because the title's own list was never
+    # deduplicated and the lead was only compared against it afterwards.
+    seen, unique = {lead.lower()} if lead else set(), []
+    for f in feats:
+        if f.lower() in seen:
+            continue
+        seen.add(f.lower())
+        unique.append(f)
+    return lead, unique, title
 
 
 def compose_title(title, feats, bpm=None):
