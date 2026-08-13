@@ -24,6 +24,8 @@ comparison for every source so no provider can slip a different standard in.
 """
 import os
 import sys
+import threading
+import time
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
@@ -135,6 +137,117 @@ def from_ytmusic(artist, title, duration=None):
                 "matched_duration": h.get("duration_seconds"),
                 "source": "ytmusic"}
     return ERROR if failed else None
+
+
+_DZ_QUERY = """
+query MuzziLyrics($id: String!) {
+  track(trackId: $id) {
+    id
+    title
+    lyrics { text synchronizedLines { lrcTimestamp line } }
+  }
+}"""
+
+# The JWT the ARL buys lasts about six minutes. Refreshed on a timer well
+# inside that, because a token that expires mid-sweep would turn every
+# remaining track into an error, and errors are the one thing this file exists
+# to keep separate from absences.
+_DZ_TTL = 240
+_dz = {"jwt": None, "at": 0.0}
+# verify_lyrics fetches on eight threads, and this token is shared by all of
+# them. Without the lock they race to refresh an expired one: harmless in
+# effect, since the exchange is idempotent, but it spends eight logins on the
+# credential most likely to be rate limited.
+_dz_lock = threading.Lock()
+
+
+def _deezer_jwt(session):
+    """-> a bearer token, or None. The ARL cookie is exchanged for it."""
+    with _dz_lock:
+        if _dz["jwt"] and time.time() - _dz["at"] < _DZ_TTL:
+            return _dz["jwt"]
+        from pipeline.health import secret
+        arl = secret("deezer_arl")
+        if not arl:
+            return None
+        try:
+            r = session.post("https://auth.deezer.com/login/arl",
+                             params={"jo": "p", "rto": "c", "i": "c"},
+                             cookies={"arl": arl}, timeout=25)
+            if r.status_code != 200:
+                return None
+            _dz["jwt"] = (r.json() or {}).get("jwt")
+        except Exception:
+            return None
+        _dz["at"] = time.time()
+        return _dz["jwt"]
+
+
+def from_deezer(artist, title, deezer_id, session=None):
+    """-> a candidate from Deezer, None, or ERROR.
+
+    Asked by the exact track id the cascade already resolved, never by search.
+    That is the whole reason this source is safe to use: NetEase was measured
+    answering HTTP 200 with well-formed lyrics for a completely different song,
+    and the only thing standing in its way was the name comparison. Here there
+    is no search step to go wrong, so a wrong answer would require Deezer to
+    return the wrong lyrics for a track id it named itself.
+
+    Deezer's own timings come as `[mm:ss.xx]` strings, which is the LRC format
+    write_tags and pipeline/lrc.py already read, so no conversion is needed and
+    none is invented.
+
+    Unofficial, so it is on the same footing as every other unofficial source
+    here: probed before use, and never the sole support for anything.
+    """
+    if not deezer_id:
+        return None
+    from pipeline import health
+    if health.blocked("deezer_lyrics"):
+        return ERROR
+    import requests
+    s = session or requests.Session()
+    token = _deezer_jwt(s)
+    if not token:
+        # No ARL configured is an absence of a capability, not of lyrics, and
+        # the caller must not cache it as either.
+        return ERROR
+    try:
+        r = s.post("https://pipe.deezer.com/api",
+                   headers={"Authorization": f"Bearer {token}"},
+                   json={"operationName": "MuzziLyrics",
+                         "variables": {"id": str(deezer_id)},
+                         "query": _DZ_QUERY}, timeout=25)
+        if r.status_code != 200:
+            return ERROR
+        d = r.json()
+    except Exception:
+        return ERROR
+    if d.get("errors"):
+        return ERROR
+    track = ((d.get("data") or {}).get("track") or {})
+    ly = track.get("lyrics") or {}
+    lines = [x for x in (ly.get("synchronizedLines") or [])
+             if x.get("lrcTimestamp") and x.get("line")]
+    synced = "\n".join(f"{x['lrcTimestamp']}{x['line']}" for x in lines) or None
+    plain = (ly.get("text") or "").strip() or None
+    if not (synced or plain):
+        return None
+    return {"synced": synced, "plain": plain,
+            # Deezer's own title, so the caller's title comparison is a real
+            # check: it catches this endpoint answering about a different
+            # track than the id names.
+            #
+            # The artist is ours, not Deezer's, and it is worth being explicit
+            # that this makes the caller's artist_fit a tautology for this
+            # source. The artist was already compared where the id came from:
+            # cascade's deezer-search requires fit >= 0.6 on artist AND title
+            # before it records a deezer_id at all. Asking for it again here
+            # would cost a second field in the query to re-check something
+            # this track's id could not have without.
+            "matched": f"{artist} - {track.get('title') or title}",
+            "matched_duration": None,
+            "source": "deezer"}
 
 
 def from_genius(artist, title, token=None, session=None):

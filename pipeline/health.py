@@ -177,10 +177,66 @@ def _ytmusic(_s):
     return OK, "answered"
 
 
+def _deezer_lyrics(s):
+    """Deezer's lyrics, which are a different question from Deezer's search.
+
+    Probed separately because it fails separately: the public search API needs
+    no credentials, while lyrics need an ARL cookie exchanged for a
+    short-lived token. An expired ARL leaves search working perfectly and
+    every lyric lookup returning nothing, which without this reads as "Deezer
+    has no lyrics for your music".
+
+    Asked by exact track id, so this checks the two things that can break: the
+    token exchange, and whether an id we name comes back with its own lyrics.
+    """
+    arl = secret("deezer_arl")
+    if not arl:
+        return NO_KEY, "no deezer_arl in config/secrets.json"
+    try:
+        r = s.post("https://auth.deezer.com/login/arl",
+                   params={"jo": "p", "rto": "c", "i": "c"},
+                   cookies={"arl": arl}, timeout=20)
+        if r.status_code != 200:
+            return DOWN, f"auth returned HTTP {r.status_code}"
+        jwt = (r.json() or {}).get("jwt")
+    except Exception as e:
+        return DOWN, f"auth {type(e).__name__}: {str(e)[:40]}"
+    if not jwt:
+        # The ARL is the only credential, so no token means it is no longer
+        # valid. That is a key problem, not an outage, and it needs a person.
+        return BAD_KEY, "the ARL was not accepted; log in again and replace it"
+
+    # Daft Punk, "Harder, Better, Faster, Stronger". A track that will not be
+    # withdrawn, asked by id so a search cannot be what fails.
+    query = ("query P($id: String!) { track(trackId: $id) "
+             "{ title lyrics { text } } }")
+    try:
+        r = s.post("https://pipe.deezer.com/api",
+                   headers={"Authorization": f"Bearer {jwt}"},
+                   json={"operationName": "P", "variables": {"id": "3135556"},
+                         "query": query}, timeout=20)
+        if r.status_code != 200:
+            return DOWN, f"pipe returned HTTP {r.status_code}"
+        d = r.json()
+    except Exception as e:
+        return DOWN, f"pipe {type(e).__name__}: {str(e)[:40]}"
+    if d.get("errors"):
+        # A GraphQL error on a fixed query means the schema moved under us,
+        # which is the standing hazard of an unofficial endpoint.
+        return CHANGED, str(d["errors"])[:70]
+    track = ((d.get("data") or {}).get("track") or {})
+    if not ((track.get("lyrics") or {}).get("text") or "").strip():
+        return CHANGED, "no lyrics for a track it certainly has"
+    return OK, f"answered for {track.get('title')!r}"
+
+
 def _genius(s):
-    token = _genius_token()
+    # The same key name lyrics_fetch._genius_token reads. Spelled once, here,
+    # because two spellings of one secret is a source that silently stops
+    # being asked.
+    token = secret("genius_access_token")
     if not token:
-        return NO_KEY, "no token in config/secrets.json"
+        return NO_KEY, "no genius_access_token in config/secrets.json"
     r = s.get("https://api.genius.com/search",
               params={"q": f"{PROBE_ARTIST} {PROBE_TITLE}"},
               headers={"Authorization": f"Bearer {token}", **UA}, timeout=20)
@@ -193,24 +249,29 @@ def _genius(s):
     return OK, "answered"
 
 
-def _genius_token():
+def secret(name):
+    """-> one value out of config/secrets.json, or None.
+
+    Read through the same key names the pipeline itself uses. A probe that
+    looks up a different spelling reports "not configured" for a source that is
+    configured, which is a lie in the one direction this module exists to
+    prevent: the source is then never asked, and its silence looks like an
+    absence rather than a misreading of a file.
+    """
     p = os.path.join(HERE, "config", "secrets.json")
     if not os.path.exists(p):
         return None
     try:
         with open(p, encoding="utf-8") as fh:
-            d = json.load(fh)
+            return json.load(fh).get(name) or None
     except (OSError, ValueError):
         return None
-    for k in ("genius", "genius_token", "GENIUS_TOKEN"):
-        if d.get(k):
-            return d[k]
-    return None
 
 
 PROBES = {
     "lrclib": _lrclib,
     "deezer": _deezer,
+    "deezer_lyrics": _deezer_lyrics,
     "itunes": _itunes,
     "musicbrainz": _musicbrainz,
     "coverartarchive": _coverartarchive,

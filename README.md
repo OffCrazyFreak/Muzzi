@@ -888,6 +888,42 @@ closed.
 
 ---
 
+## Timed lyrics, and where they come from
+
+LRCLIB first, and it is the only one that publishes a duration to match
+against. When it has nothing, or when what it has carries no timings, the
+others are asked:
+
+| Source | Gives | Note |
+|---|---|---|
+| **Deezer** | timed | Asked by the exact track id the cascade already resolved, so it does no searching |
+| **YouTube Music** | timed | Carries the regional releases LRCLIB has never been given |
+| **Genius** | words only | Untimed words still beat timed words belonging to a different song |
+
+**Escalating on absence alone was leaving timed lyrics on the table.** LRCLIB
+answering with untimed words counts as an answer, so nothing else was ever
+asked, and 196 entries stayed plain for good even where the same song exists
+timed elsewhere. Measured on a frozen 160-track sample, asking again when the
+answer has no timings gained 12 tracks: **8 Balkan and 4 not, 14% of that
+cohort against 4% of the rest**, with nothing lost. Deezer supplied 11 of the
+12.
+
+When LRCLIB has already given words, only a *timed* answer is taken. Swapping
+one set of untimed words for another changes the provenance and nothing else.
+
+**Deezer needs an `arl` cookie** from a free account, in `deezer_arl`. It is
+unofficial and it expires when you log out, which is precisely why it is
+probed: an expired cookie leaves Deezer's public search working perfectly
+while every lyric lookup returns nothing, and without a probe that reads as
+"Deezer has no lyrics for your music". Without the cookie the source reports
+itself unconfigured and the other two carry on.
+
+Asking by track id rather than by search is the reason this one is safe.
+NetEase was measured answering HTTP 200 with well-formed timed lyrics for a
+completely unrelated song, and the only thing in its way was the name
+comparison. Here there is no search step to go wrong. See `PLAN.md` for that
+measurement.
+
 ## When a source is down
 
 A source that is down does not say so. It returns nothing, and nothing is

@@ -23,6 +23,7 @@ Candidate selection is ours: LRCLIB returns many near-duplicate entries per
 song, so we pick by closest duration to the actual file, which is what stops a
 lyric sheet written for a different edit from drifting out of sync.
 """
+import json
 import os
 import re
 import sys
@@ -58,7 +59,13 @@ from pipeline.webmatch import MIN_FIT  # noqa: F401  re-exported
 #      and a wrong-artist hit could ship as a fallback.
 #   2  title compared in the picker, wrong-artist fallbacks recorded as such,
 #      and artist_fit/title_fit stamped on every entry.
-SELECTOR = 2
+#   3  Deezer asked by exact track id, ahead of YouTube Music and Genius. A
+#      new source is a rule change like any other: an entry holding plain
+#      words is `ok` and was never revisited, so without this bump a source
+#      that has the same song TIMED could not reach the 196 plain-only
+#      entries already in the cache. Entries that already hold good synced
+#      lyrics are re-judged for nothing and kept.
+SELECTOR = 3
 
 # _UNDECOMPOSED is shared rather than copied: a query variant that folded a
 # letter differently from the comparison that judges the answer would ask for
@@ -305,7 +312,77 @@ def _good(entry):
             and bool(entry.get("synced")))
 
 
-def _from_other_sources(artist, title, duration):
+def deezer_ids():
+    """-> {source path: Deezer track id}, from the cascade's own cache.
+
+    One reader, imported by everything that needs it, because the id is what
+    makes the Deezer lyric lookup exact and two spellings of "where do I find
+    it" is one spelling that goes stale.
+
+    Missing is normal: the cascade has not run, or it ran and this track has
+    no Deezer id. Both mean the same thing to the caller, which is that this
+    source cannot be asked about this track.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, "cache", "cascade.json")
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            cache = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return {p: (e.get("facts") or {}).get("deezer_id")
+            for p, e in cache.items()
+            if (e.get("facts") or {}).get("deezer_id")}
+
+
+def _drop_drifting_timings(got, duration):
+    """Keep the words, drop timings written for a different edit.
+
+    A sheet's timings were written for ITS copy of the song. A file that is a
+    different length carries a different edit, so plain words beat subtitles
+    that drift.
+
+    Applied to every source that publishes a duration rather than only to the
+    one it was first written for. A source that reports none, as Deezer does,
+    is untouched here and judged later by write_tags on the same rule.
+    """
+    from pipeline import lyric_sources
+    md = got.get("matched_duration")
+    if got.get("synced") and md and duration:
+        drift = abs(md - duration)
+        if drift > lyric_sources.MAX_DRIFT:
+            got["synced"] = None
+            got["timing_dropped"] = f"{drift:.0f}s from this file"
+    return got
+
+
+def _other_sources(artist, title, duration, deezer_id):
+    """The sources asked after LRCLIB, in the order their answers are worth.
+
+    Deezer first: it is asked by the exact track id the cascade already
+    resolved, so unlike every other source here it does no searching and
+    cannot answer about a different song. It is also the only one of the three
+    that measured better on Balkan tracks than on the rest.
+
+    Then YouTube Music, which carries the regional releases LRCLIB has never
+    been given, then Genius, which has the words but never the timings.
+
+    A generator of (name, callable) so the caller does the error bookkeeping
+    once instead of once per source, which is where the old version repeated
+    itself.
+    """
+    from pipeline import lyric_sources
+    yield "deezer", lambda: lyric_sources.from_deezer(artist, title, deezer_id)
+    yield "ytmusic", lambda: lyric_sources.from_ytmusic(artist, title,
+                                                        duration)
+    token = _genius_token()
+    if token:
+        yield "genius", lambda: lyric_sources.from_genius(artist, title, token)
+
+
+def _from_other_sources(artist, title, duration, deezer_id=None):
     """-> a candidate, None, or lyric_sources.ERROR.
 
     Order is by what the answer is worth: timed lyrics that fit the file
@@ -319,26 +396,16 @@ def _from_other_sources(artist, title, duration):
     """
     from pipeline import lyric_sources
     failed = False
-    got = lyric_sources.from_ytmusic(artist, title, duration)
-    if got is lyric_sources.ERROR:
-        failed, got = True, None
-    if got and got.get("synced"):
-        # Its timings were written for ITS copy of the song. A file that is
-        # a different length carries a different edit, so keep the words and
-        # drop the timings rather than ship subtitles that drift.
-        md, dur = got.get("matched_duration"), duration
-        if md and dur and abs(md - dur) > lyric_sources.MAX_DRIFT:
-            got["synced"] = None
-            got["timing_dropped"] = f"{abs(md - dur):.0f}s from this file"
-    if got and (got.get("synced") or got.get("plain")):
-        return got
-    token = _genius_token()
-    if token:
-        g = lyric_sources.from_genius(artist, title, token)
-        if g is lyric_sources.ERROR:
+    for _name, ask in _other_sources(artist, title, duration, deezer_id):
+        got = ask()
+        if got is lyric_sources.ERROR:
             failed = True
-        elif g:
-            return g
+            continue
+        if not got:
+            continue
+        got = _drop_drifting_timings(got, duration)
+        if got.get("synced") or got.get("plain"):
+            return got
     return lyric_sources.ERROR if failed else None
 
 
@@ -355,7 +422,8 @@ def _genius_token():
     return _genius_token.value
 
 
-def fetch(artist, title, cache, session, album=None, duration=None):
+def fetch(artist, title, cache, session, album=None, duration=None,
+          deezer_id=None):
     """-> {"synced": str|None, "plain": str|None, "status": "ok"|"absent"}.
 
     A cached entry is reused only when it is definitive AND was chosen by the
@@ -463,17 +531,32 @@ def fetch(artist, title, cache, session, album=None, duration=None):
             # cache; it stays only so the audit can see what was offered.
             near = hit
 
-    # LRCLIB had nothing for this song. Ask the other catalogues before
-    # recording an absence: LRCLIB is thin outside English, which is most of
-    # this library, and YouTube Music carries the same songs timed.
-    if best is None:
+    # Ask the other catalogues when LRCLIB had nothing for this song, and also
+    # when what it had has no timings.
+    #
+    # Escalating only on absence was the older rule, and it left the 196
+    # plain-only entries in this cache permanently plain: LRCLIB answering
+    # with untimed words counts as an answer, so nothing else was ever asked,
+    # even when Deezer holds the same song timed. Measured over 80 tracks,
+    # that is 9 of 40 Balkan tracks and 3 of 40 others.
+    #
+    # Timed words are strictly better than untimed ones for the same song, and
+    # the sheet is judged by the same gates either way, so there is no case
+    # where keeping the untimed answer is right when a timed one exists.
+    untimed = best is not None and not best.get("syncedLyrics")
+    if best is None or untimed:
         from pipeline import lyric_sources
-        alt = _from_other_sources(artist, title, duration)
+        alt = _from_other_sources(artist, title, duration, deezer_id)
         if alt is lyric_sources.ERROR:
             # A source we could not reach is not a source that said no.
             # Suppress every absence below so nothing is written and the next
             # run asks again, exactly as an LRCLIB error already does.
             saw_answer, near, alt = False, None, None
+        # When LRCLIB already gave us words, only a TIMED answer is worth
+        # taking. Swapping one set of untimed words for another changes the
+        # provenance and nothing else.
+        if alt and untimed and not alt.get("synced"):
+            alt = None
         if alt:
             alt.update({"status": "ok", "selector": SELECTOR,
                         "artist_fit": fit(artist, alt["matched"].partition(" - ")[0])
@@ -545,6 +628,10 @@ def main():
     ap.add_argument("--only-missing", action="store_true",
                     help="only retry entries currently recorded as having "
                          "no lyrics")
+    ap.add_argument("--only", metavar="PATHS",
+                    help="a file of source paths or fingerprints, one per "
+                         "line: fetch only these. For verifying against a "
+                         "frozen sample")
     args = ap.parse_args()
 
     review = json.load(open(os.path.join(here, "cache", "review.json")))
@@ -564,11 +651,17 @@ def main():
             e = cache.get(f'{r["proposed_artist"]}|{r["proposed_title"]}'.lower())
             return isinstance(e, dict) and not e.get("synced") and not e.get("plain")
         rows = [r for r in rows if is_miss(r)]
+    if args.only:
+        from pipeline import subset
+        want, unknown = subset.read(args.only, {r["path"] for r in rows})
+        subset.report(args.only, unknown)
+        rows = [r for r in rows if r["path"] in want]
     if args.limit:
         rows = rows[: args.limit]
 
     before_s = sum(1 for v in cache.values()
                    if isinstance(v, dict) and v.get("synced"))
+    dz = deezer_ids()
     session = requests.Session()
     gained, errors, resolved = 0, 0, 0
     t0 = time.time()
@@ -578,7 +671,8 @@ def main():
             cache.get(key), dict) else False
         out = fetch(r["proposed_artist"], r["proposed_title"], cache, session,
                     album=r.get("proposed_album"),
-                    duration=durations.get(r["path"]))
+                    duration=durations.get(r["path"]),
+                    deezer_id=dz.get(r["path"]))
         if out.get("status") == "error":
             errors += 1
         else:
