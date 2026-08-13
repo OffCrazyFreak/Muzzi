@@ -57,11 +57,14 @@ def rewrite(s, pairs):
     `.../Music Mine 2`, which is a different folder.
     """
     for old, new in pairs:
-        # Already where it is going. Without this, a destination nested under
-        # its own source ("/a" -> "/a/moved") grows a segment on every run:
-        # /a/moved/moved/x. Checked first so a second run is a no-op.
+        # Already where THIS pair would put it, so this pair is done with it.
+        # `continue`, not `return`: another pair may still legitimately match,
+        # and returning here left a string under one pair's destination
+        # untouched by every later rule. Without the check at all, a
+        # destination nested under its own source ("/a" -> "/a/moved") grows a
+        # segment on every run: /a/moved/moved/x.
         if s == new or s.startswith(new + os.sep):
-            return s, False
+            continue
         if s == old:
             return new, True
         if s.startswith(old + os.sep):
@@ -129,12 +132,33 @@ def main():
     # string the outer pair has already rewritten.
     pairs.sort(key=lambda p: len(p[0]), reverse=True)
 
+    # A chain, where one pair's destination is another pair's source, cannot
+    # be expressed as a single pass: /a=/b/x with /b=/c rewrites a file to
+    # /b/x/song.mp3, a path in neither the old layout nor the new one, and
+    # both pairs report a healthy count while doing it. Refused rather than
+    # ordered, because "which of these did you mean" is not ours to guess.
+    def under(a, b):
+        return a == b or a.startswith(b + os.sep)
+
+    for old_a, new_a in pairs:
+        for old_b, _ in pairs:
+            if old_a != old_b and under(new_a, old_b):
+                sys.exit(f"these two chain: {old_a} moves into {new_a}, which "
+                         f"{old_b} then moves again.\nRun them one at a time, "
+                         f"or give the final destination for each.")
+
     for old, new in pairs:
         if args.apply and not os.path.isdir(new):
             sys.exit(f"the new folder does not exist, so this would point "
                      f"every cache at nothing: {new}")
 
+    # Two passes. Every cache is rewritten in memory and checked before any
+    # of them is written, because the failure this guards against is
+    # discovered halfway through: exiting on a collision in the eleventh
+    # cache after replacing ten of them leaves cache/ half relocated, and the
+    # message saying nothing was written would be a lie.
     total, touched, totals = 0, [], [0] * len(pairs)
+    pending = []
     for path in sorted(glob.glob(os.path.join(CACHE, "*.json"))):
         name = os.path.basename(path)
         if ".bak" in name:
@@ -156,16 +180,19 @@ def main():
             continue
         total += count[0]
         touched.append((name, count[0]))
-        if args.apply:
-            # Backed up once, then replaced atomically: a half-written cache
-            # is worse than a stale one, because nothing downstream can tell.
-            # Refreshed every run, not written once. The backup exists to
-            # undo the run being made now; keeping the first one forever
-            # leaves every later move unprotected, which is backwards.
+        pending.append((path, new_data))
+
+    if args.apply:
+        for path, new_data in pending:
+            # The backup is refreshed every run, not written once: it exists
+            # to undo the run being made now, and keeping the first one
+            # forever leaves every later move unprotected.
             shutil.copy2(path, path + ".bak-relocate")
+            # Written to a temporary file and renamed, because a half-written
+            # cache is worse than a stale one: nothing downstream can tell.
             tmp = path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(new_data, fh, ensure_ascii=False)
+                json.dump(new_data, fh, ensure_ascii=False, indent=1)
             os.replace(tmp, path)
 
     for name, n in touched:
