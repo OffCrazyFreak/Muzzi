@@ -410,7 +410,7 @@ def copy_audio(src, dst, cut):
         shutil.copy2(src, dst)
         return 0.0
     # Never stage inside the output tree: write_tags --prune deletes anything
-    # under out/_all that this run did not intend to be there.
+    # under output/_all that this run did not intend to be there.
     tmp = os.path.join(tempfile.gettempdir(),
                        f"muzzi-trim-{os.getpid()}{os.path.splitext(src)[1]}")
     try:
@@ -1188,7 +1188,7 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--min-confidence", type=float, default=0.90)
-    ap.add_argument("--out", default=os.path.join(HERE, "out", "_all"))
+    ap.add_argument("--out", default=os.path.join(HERE, "output", "_all"))
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--keep-duplicates", action="store_true",
                     help="write every file, including copies dedupe "
@@ -1208,7 +1208,7 @@ def main():
                     help="do not append [131] to titles/filenames")
     # The output folder accumulates. A file written by an earlier build stays
     # there forever, even once its source has become a duplicate loser or been
-    # renamed by a better identification -- so out/_all silently grew a second
+    # renamed by a better identification -- so output/_all silently grew a second
     # copy of 59 songs the moment the re-downloads won their groups. Nothing
     # here is irreplaceable: everything in out/ is derived from the sources.
     ap.add_argument("--prune", action="store_true",
@@ -1386,7 +1386,7 @@ def main():
 
     # Deepest directory every source shares. Paths are mirrored relative to it,
     # so "<...>/Music library from phone/Music Mine/x.mp3" becomes
-    # "out/_all/Music library from phone/Music Mine/x.mp3".
+    # "output/_all/Music library from phone/Music Mine/x.mp3".
     common_root = ""
     if not args.flat:
         dirs = {os.path.dirname(r["path"]) for r in rows if r.get("path")}

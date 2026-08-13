@@ -3,17 +3,17 @@
 #
 # Design notes:
 #  - Originals are NEVER touched. copy:yes + move:no means beets reads the
-#    source folder and writes copies into out/_all.
+#    source folder and writes copies into output/_all.
 #  - Layout is flat by choice: tags do the organising, crates are built later
 #    as folders + M3U. Phone browsing works better flat.
 #  - Everything is singleton-oriented; this library is loose tracks, not albums.
 
-directory: ../out/_all
+directory: ../output/_all
 library: ../cache/library.db
 
 # ---------------------------------------------------------------- import
 import:
-    copy: yes           # copy into out/_all
+    copy: yes           # copy into output/_all
     move: no            # never relocate the source
     write: yes          # embed tags into the copied files (portability)
     delete: no

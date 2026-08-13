@@ -14,8 +14,8 @@ reviews:
         missing. Flag anything that rewrites an existing cache entry, caches a
         failed request as a real answer, or keys a cache on a truncated
         fingerprint. Source audio is read-only: flag any write back to a source
-        folder, and any audio written outside out/_all. Writes to cache/,
-        review/ and out/playlists/ are expected.
+        folder, and any audio written outside output/_all. Writes to cache/,
+        review/ and output/playlists/ are expected.
         Essentia must never run in a thread or across a fork.
     - path: "pipeline/write_tags.py"
       instructions: >-

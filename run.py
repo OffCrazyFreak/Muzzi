@@ -216,12 +216,12 @@ def main():
                     stage("yt_links", "--apply")]),
 
         # The only stage that writes audio, and it writes copies.
-        # --prune because out/_all is a rebuild, not an accumulation: without
+        # --prune because output/_all is a rebuild, not an accumulation: without
         # it, a file whose source has since become a duplicate loser stays in
         # the output forever and the library grows a second copy of the song.
         # It will not delete the only copy of anything -- see write_tags.py.
         ("serial", [stage("write_tags", "--prune"), stage("export"),
-                    stage("verify", os.path.join(HERE, "out", "_all"))]),
+                    stage("verify", os.path.join(HERE, "output", "_all"))]),
     ]
 
     # --from: drop every phase before the one containing that stage.

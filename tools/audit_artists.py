@@ -5,7 +5,7 @@ Reports only. Nothing here writes to the library, to cache/ or to config/.
 
 Two surfaces, because they disagree. --review audits what the pipeline would
 write next (proposed_artist with artist_canon.json applied); --tags audits what
-the phone shows now, read from the files in out/_all. out/_all is only rewritten
+the phone shows now, read from the files in output/_all. output/_all is only rewritten
 when write_tags runs, so a name fixed in the proposal can still be wrong on the
 phone, and a name broken only on disk never appears in the proposal at all.
 
@@ -14,7 +14,7 @@ Rules 4 and 5 report nothing both when they work and when they are broken, so
 
 Usage:
   audit_artists.py --review cache/review.json --canon cache/artist_canon.json
-  audit_artists.py --tags out/_all
+  audit_artists.py --tags output/_all
   audit_artists.py --selftest
 """
 import argparse
@@ -147,7 +147,7 @@ def load_tags(root):
     """-> ({field: [files]}, {artist: [files]}) read from the written audio.
 
     review.json is the proposal; this is what the phone actually shows. They
-    drift, because out/_all is only rewritten when write_tags runs.
+    drift, because output/_all is only rewritten when write_tags runs.
 
     easy=True deliberately: it maps TPE1, (c)ART and FLAC's "artist" to one key,
     and returns str for all three. Reading the MP4 atom directly would hand
