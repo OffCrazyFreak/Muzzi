@@ -26,7 +26,8 @@ Licensed [AGPL-3.0](LICENSE).
 out/_all/          one copy of every song, tagged, in the same subfolder
                    layout as your sources; a .lrc sidecar next to each
 out/playlists/     .m3u by BPM band, decade, language, mood, quality, and
-                   the hand-curated scenes; 15 tracks minimum
+                   the hand-curated scenes; 15 tracks minimum, except
+                   Language, which is kept whatever its size
 review/            numbered spreadsheets, only what needs your eyes
 hints.tsv          every answer you have ever given, kept permanently
 ```
@@ -508,7 +509,7 @@ answered: the Deezer genre and the shared-tag fallback between them produced
 r&b", "Dance" next to "dance" and "Pop" next to "pop". A blocklist has to
 guess what an API will say next, which is why the old one had to name "Glee"
 and "Gazda Paja" individually. `genres.GENRES` names the ~24 strings allowed
-to reach a file instead, `genres.MERGE` folds the synonyms into them, and
+to reach a file instead, `genres._MERGE` folds the synonyms into them, and
 `genres.allow()` is the single gate every source passes through. Anything it
 cannot place produces no genre. The same list collapses five rap names into
 Hip-Hop and drops the ampersand from genre names, because players split a

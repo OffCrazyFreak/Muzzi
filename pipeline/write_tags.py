@@ -528,8 +528,15 @@ def write_generic(dst, fields, art_path, lyrics):
     else:
         # FLAC / OGG: Vorbis comments are free-form uppercase keys.
         for k, v in fields.items():
-            if v not in (None, ""):
-                f[k.upper()] = str(v)
+            key = k.upper()
+            if v in (None, ""):
+                # Remove rather than skip, for the same reason the MP4 branch
+                # above pops: this writes over the previous build, so a genre
+                # we no longer stand behind would otherwise outlive the rule
+                # that stopped producing it.
+                f.pop(key, None)
+            else:
+                f[key] = str(v)
         if lyrics:
             f["LYRICS"] = lyrics
         if art_path and os.path.exists(art_path) and isinstance(f, FLAC):

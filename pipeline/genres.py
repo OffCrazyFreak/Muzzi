@@ -195,6 +195,15 @@ def canonical(tags, title=None):
     """
     cleaned = [t.strip() for t in (tags or []) if t and not _NOISE.match(t.strip())]
     for tag in cleaned:
+        # An exact allowed name is already the answer, so it must not be run
+        # through the rules: "Turbofolk" matches the folk rule and came out as
+        # "Folk", "Croatian Trap" matches the rap rule and came out as
+        # "Hip-Hop", and "Ex-YU", "Croatian Trash" and "Latin" matched no rule
+        # at all and were dropped. Five of the twenty-four names the whitelist
+        # exists to protect, destroyed by the step meant to canonicalise them.
+        got = allow(tag)
+        if got:
+            return got, cleaned
         for rx, name in _COMPILED:
             if not rx.search(tag):
                 continue
