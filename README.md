@@ -324,6 +324,26 @@ That last row matters: unparseable text used to be written into the title tag,
 which turned notes into song names. Anything you type outranks anything a
 lookup produced, but only when it's unambiguous what you meant.
 
+**A link that changes the song clears what the old match knew about it.** The
+recording ID, album, year, release group and cover art on a proposal belong to
+the song the fingerprint picked. When your link names a different song, they
+are wrong about the new one, so they are cleared and rebuilt from the link's
+own metadata rather than inherited. A link that only respells the same name
+(`EDEN - circles` for `EDEN - Circles`) keeps them, judged on the artist and
+title together at 0.92 similarity. Measured on the current library: of 93 rows
+answered with a link, 46 were a different song and 47 were not.
+
+The same boundary applies twice more. `cascade` records what it grew each
+track's facts from and re-enriches a track whose row now names a different
+song, instead of keeping the entry forever because the file path had not
+changed. And `write_tags` deletes an identity tag it cannot vouch for rather
+than skipping it: album, year, publisher, ISRC, track, disc and any
+MusicBrainz identifier are written when known and removed when not, on every
+container. Before that, a stale value on the source file outlived every
+correction, because writing nothing left whatever was already there. On m4a
+the track number goes in the native `trkn` atom, which is what players read,
+rather than a freeform one almost nothing reads.
+
 ### Reading the confidence column
 
 | Score | Meaning |
