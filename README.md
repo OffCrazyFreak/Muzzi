@@ -52,7 +52,13 @@ That is why:
   in the name because Samsung Music has no BPM field and won't show the tag.
   A feature marker is only read as one when it starts a word, so `Thrift Shop`
   and `Defeat The Night` keep their titles instead of losing them to an
-  invented artist called `Shop`. Each performer is credited once.
+  invented artist called `Shop`. The credit also stops where the next bracket
+  starts, so `Heroes ft. Tove Lo (Bvrnout Remix)` credits `Tove Lo` and leaves
+  the remix note on the title, instead of inventing an artist called
+  `Tove Lo (Bvrnout Remix` with a bracket it never closes. A separator left
+  stranded by a split on a different one is dropped, so `DJ Denial X & SHA` is
+  two artists rather than `DJ Denial` and `& SHA`, while `+44` and `C++` keep
+  their punctuation. Each performer is credited once.
 - Lyrics are written twice: embedded (Namida and most players read this) and as
   a `.lrc` sidecar (Samsung Music reads **only** sidecars).
 - A sheet has to be the right song *and* the right edit. Lyrics whose artist or

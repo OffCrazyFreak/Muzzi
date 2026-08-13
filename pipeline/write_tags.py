@@ -483,14 +483,14 @@ def safe_name(s, fallback="Unknown"):
 # Featured artists arrive either joined into the artist field ("Ed Sheeran;
 # Bring Me the Horizon", 37 of 41 cases here) or already inside the title.
 #
-# The pattern itself lives in artist_names, because the alias rules have to be
-# keyed on the same split this uses. It covers ";", "&", "x" and ",", the
-# feature markers ("Buba Corelli Ft. Jala Brat & Coby" carries the marker in
-# the artist field, and splitting only on "&" left a lead artist called "Buba
-# Corelli Ft. Jala Brat"), and lower-case Croatian/Serbian "i" for "and"
-# ("Ivana Selakov i Aca Lukas" is two artists; an upper-case "I" is far likelier
-# to be part of a name).
-_ARTIST_SPLIT = artist_names.ARTIST_SPLIT
+# The split itself lives in artist_names.split_credit, because the alias rules
+# have to be keyed on the same split this uses. It covers ";", "&", "x" and
+# ",", the feature markers ("Buba Corelli Ft. Jala Brat & Coby" carries the
+# marker in the artist field, and splitting only on "&" left a lead artist
+# called "Buba Corelli Ft. Jala Brat"), and lower-case Croatian/Serbian "i"
+# for "and" ("Ivana Selakov i Aca Lukas" is two artists; an upper-case "I" is
+# far likelier to be part of a name).
+#
 # The marker has to start a word. Without the leading boundary the prefix is
 # entirely optional, so the match can begin at the final "ft" of an ordinary
 # word: "Defeat The Night" became "De (ft. The Night)", "Thrift Shop" became
@@ -499,6 +499,25 @@ _ARTIST_SPLIT = artist_names.ARTIST_SPLIT
 _FEAT_IN_TITLE = re.compile(
     r"(?:^|[\s\(\[])\s*[\(\[]?\s*(?:feat\.?|ft\.?|featuring)\s+"
     r"([^)\]]+?)\s*[\)\]]?\s*$", re.I)
+
+
+def _feat_and_tail(captured, matched):
+    """-> (the names, whatever the credit ran into and should not have).
+
+    A feature marker runs to the end of the title, so "Heroes ft. Tove Lo
+    (Bvrnout Remix)" hands the whole tail to the credit and the artist becomes
+    "Tove Lo (Bvrnout Remix", a name with an opening bracket and no closing
+    one. The capture cannot contain a closing bracket, so any opening bracket
+    in it is one it never closed: cut there, and give the group back to the
+    title, where a remix note belongs.
+    """
+    opened = next((i for i, ch in enumerate(captured) if ch in "(["), None)
+    if opened is None:
+        return captured, ""
+    tail = captured[opened:]
+    if matched.rstrip().endswith((")", "]")):
+        tail += ")" if captured[opened] == "(" else "]"
+    return captured[:opened], tail
 
 
 def split_credits(artist, title):
@@ -510,9 +529,12 @@ def split_credits(artist, title):
     feats = []
     m = _FEAT_IN_TITLE.search(title or "")
     if m:
-        feats += [x.strip() for x in _ARTIST_SPLIT.split(m.group(1)) if x.strip()]
+        names, tail = _feat_and_tail(m.group(1), m.group(0))
+        feats += artist_names.split_credit(names)
         title = _FEAT_IN_TITLE.sub("", title).strip()
-    parts = [p.strip() for p in _ARTIST_SPLIT.split(artist or "") if p.strip()]
+        if tail:
+            title = f"{title} {tail}".strip()
+    parts = artist_names.split_credit(artist)
     lead = parts[0] if parts else artist
     for p in parts[1:]:
         if p.lower() not in {f.lower() for f in feats}:
