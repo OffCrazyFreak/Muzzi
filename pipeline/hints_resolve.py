@@ -57,6 +57,45 @@ _CRUFT = re.compile(
           |tekst|prevod|spot|u[zxž]ivo)
         \s*[\)\]\|]?\s*""", re.I | re.X)
 
+# The same words as whole tokens, plus the ones that only ever appear inside a
+# bracketed group. Used to decide whether a WHOLE group is decoration, which
+# the per-token rule above cannot do: it removes "(lyrics" and "tekst)" one at
+# a time and leaves the "/" between them behind, at confidence 1.0, in the
+# title tag, and as "_" in the filename.
+_CRUFT_TOKEN = re.compile(
+    r"""^(?:official|music|video|audio|lyrics?|lyric|letra|text|tekst|prevod
+         |spot|hq|hd|4k|uhd|visualizer|mv|remaster(?:ed)?|live|u[zxž]ivo
+         |full|version|versi[oó]n|oficial|hq/hd|(?:19|20)\d{2})$""",
+    re.I | re.X)
+# One bracketed group with no nesting. Applied repeatedly, so "(a) [b]" both go.
+_GROUP = re.compile(r"[\(\[]([^()\[\]]*)[\)\]]")
+# What separates tokens inside a group. "/" is here, and only here: a slash
+# between two cruft words is punctuation, while AC/DC and Love/Hate are names.
+_IN_GROUP_SEP = re.compile(r"[\s/,;:|.–—_+-]+")
+
+
+def _drop_cruft_groups(title):
+    """-> the title with every wholly-decorative bracketed group removed.
+
+    A group goes only when EVERY token in it is a known cruft word, a year, or
+    a separator. "(Lyrics/Tekst)" and "[OFFICIAL HQ VIDEO / SPOT]" go;
+    "(Payphone Parody)" and "(Bvrnout Remix)" stay, because they carry words
+    this does not recognise and a title is not ours to invent.
+    """
+    def repl(m):
+        toks = [t for t in _IN_GROUP_SEP.split(m.group(1)) if t]
+        # "not toks" as well: a nested group whose inside was already removed
+        # leaves an empty one behind, and "Song [ ]" is not a cleaner title
+        # than "Song [(Lyrics/Tekst)]" was.
+        if not toks or all(_CRUFT_TOKEN.match(t) for t in toks):
+            return " "
+        return m.group(0)
+
+    prev = None
+    while prev != title:
+        prev, title = title, _GROUP.sub(repl, title)
+    return title
+
 
 def video_id(url):
     m = _VID.search(url or "")
@@ -204,7 +243,11 @@ _TAIL = re.compile(
 def clean_title(t):
     if not t:
         return t
-    out = _CRUFT.sub(" ", t)
+    # Whole decorative groups first. Left to the per-token rule below, the
+    # words inside "(lyrics/tekst)" vanish one at a time and the separator
+    # between them survives.
+    out = _drop_cruft_groups(t)
+    out = _CRUFT.sub(" ", out)
     out = _TAIL.sub("", out)
     # A release year tacked onto the title. Uploaders write "Drugu neću -
     # 2010", and it is enough to stop the song matching the same song without
@@ -218,7 +261,11 @@ def clean_title(t):
         out = out.rstrip(") ")
     if out.count("]") > out.count("["):
         out = out.rstrip("] ")
-    out = re.sub(r"\s{2,}", " ", out).strip(" -_|.–—")
+    # "/" is stripped at the ENDS only, never from the middle: a slash left
+    # dangling by the cleanup is punctuation, and AC/DC and Love/Hate are
+    # names. Filename sanitising and metadata normalisation are different
+    # jobs, and safe_name() mapping "/" to "_" only hid this one.
+    out = re.sub(r"\s{2,}", " ", out).strip(" -_|.–—/")
     return out or t
 
 
