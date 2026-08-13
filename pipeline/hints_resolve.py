@@ -439,7 +439,7 @@ def resolve(url, cache, limiter, session):
     note after it, two links, a search-results page, or a link to some other
     site entirely. All of them are answerable, so all of them are accepted."""
     vid = video_id(url)
-    key, info = vid, None
+    key, info, from_search = vid, None, False
     if vid:
         if vid in cache and not cache[vid].get("error"):
             return cache[vid]
@@ -449,6 +449,7 @@ def resolve(url, cache, limiter, session):
         target = f"ytsearch1:{query}" if query else other_url(url)
         if not target:
             return {"error": "no link or search in this hint"}
+        from_search = bool(query)
         key = target
         if key in cache and not cache[key].get("error"):
             return cache[key]
@@ -463,7 +464,11 @@ def resolve(url, cache, limiter, session):
     out = {"video_id": vid, "video_title": info.get("video_title"),
            "channel": info.get("channel"), "duration": info.get("duration"),
            "artist": artist, "title": title, "derived_from": how,
-           "site": info.get("extractor"), "album": info.get("meta_album")}
+           "site": info.get("extractor"), "album": info.get("meta_album"),
+           # A search result is the first thing YouTube offered, not a video
+           # anyone chose. review.py scores it below the auto bar for that
+           # reason, so it lands in the queue instead of clearing it.
+           "from_search": from_search}
 
     mb = enrich_mb(artist, title, limiter, session)
     if mb:

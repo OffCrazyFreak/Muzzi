@@ -322,6 +322,13 @@ def sheet_groups(rows):
 # alignment could not be checked.
 _TRIM_WORTH_CHECKING = 0.5
 
+# What a hint resolved from a pasted SEARCH is worth. Below --auto-thresh
+# (0.90) so the row lands in the review queue, and above --review-thresh
+# (0.55) so it sorts as a strong candidate rather than a doubtful one: the
+# first result of a search you typed is usually right, it is just not a thing
+# you confirmed.
+SEARCH_HINT_CONF = 0.85
+
 
 def timing_rows(rows):
     """-> the rows whose audio timing or lyric timing needs a human.
@@ -964,8 +971,17 @@ def main():
                 if note:
                     m["release"] = rel
                 e["match"] = m
-                conf = 1.0
-                reasons = [f"from your link ({res.get('derived_from')}"
+                # A pasted search is a supported way to answer, but its result
+                # is the first thing YouTube offered, not a video anyone
+                # picked. Scoring it 1.0 put a guess through the auto gate and
+                # removed the row from review, which is exactly where a guess
+                # belongs. A note beside the search is still your judgement,
+                # so that keeps full confidence.
+                searched = bool(res.get("from_search")) and not note
+                conf = SEARCH_HINT_CONF if searched else 1.0
+                where = ("from a search you pasted" if searched
+                         else "from your link")
+                reasons = [f"{where} ({res.get('derived_from')}"
                            f"{', your note' if note else ''}"
                            f"{', confirmed on MusicBrainz' if res.get('enriched') else ''})"]
             else:
