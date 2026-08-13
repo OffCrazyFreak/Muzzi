@@ -543,7 +543,13 @@ in genuinely separate interpreters.
 
 **A hint that cannot be parsed is a note, not a title.** Free text used to
 become the title tag, which turned "same as the one above, you didn't merge"
-into a song name and lost three real titles entirely.
+into a song name and lost three real titles entirely. The first fix only
+caught the wordy half, text that read like prose or ran past eight words, so
+a one-word instruction still became a title: 28 tracks shipped as
+`Adele - redownload` at confidence 1.0, auto-accepted, never queued for
+anyone to see. Bare text is now a note whatever its length. Across every
+hint ever given here, all 31 bare hints were notes and none was a title. To
+set a title on purpose, write `title: Beograd`.
 
 **The duplicate keeper inherits the group's best identity.** The keeper is
 chosen on audio quality, which is independent of how well a track is

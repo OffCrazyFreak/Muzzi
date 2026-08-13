@@ -689,13 +689,6 @@ def _video_id(url):
     return cache_key(url)
 
 
-# Wording that means the cell is a message to me, not a song title.
-_PROSE = re.compile(
-    r"\b(same as|duplicate|dupe|didn'?t|did not|you |already|above|below|"
-    r"merge[ds]?|wrong|check|missing|see |remove|delete|both|copy|this is)\b",
-    re.I)
-
-
 def parse_hint(hint):
     """-> ("confirm"|"reject"|"override"|"url"|None, payload).
 
@@ -751,14 +744,22 @@ def parse_hint(hint):
                 fields["title"] = f"{fields['title']} ({fields.pop('version')})"
             fields.pop("version", None)
             return "override", fields
-    # Bare text with no marker. This used to become the title, which turned
-    # notes like "same as the one above, you didn't merge" into song names and
-    # lost the real titles entirely. A hint that cannot be understood is now a
-    # comment: it changes nothing and gets reported, because silently writing
-    # a sentence into a title tag is far worse than ignoring a hint.
-    if _PROSE.search(h) or len(h) > 60 or len(h.split()) > 8:
-        return "note", h
-    return "override", {"title": h}
+    # Bare text with no marker is a note, whatever its length.
+    #
+    # It used to become the title when it was short enough and read like
+    # prose, which turned "same as the one above, you didn't merge" into a
+    # song name. The length and prose tests were meant to catch that, and
+    # they only caught the wordy half: "redownload" is one word and reads
+    # like a title, so 28 tracks shipped as `Adele - redownload` at
+    # confidence 1.0 without anyone being asked. Measured across every hint
+    # ever given here, 31 bare hints existed and all 31 were notes. None was
+    # a title.
+    #
+    # So there is no guess left worth making. AGENTS.md settled it already:
+    # an unparseable hint is a note, not a title, and a blank field beats a
+    # wrong one. Setting a title on purpose is still one keystroke away and
+    # unambiguous: `title: Beograd`.
+    return "note", h
 
 
 # A note written next to a link, e.g. "<url> (Blackbear is the artist)".
