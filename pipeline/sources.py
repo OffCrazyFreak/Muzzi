@@ -48,6 +48,13 @@ def walk(roots, exts=AUDIO):
                 dirs[:] = []
                 continue
             seen.add(key)
+            # The canonical location, not the route taken to it. Reaching one
+            # folder through a link inside an earlier root would otherwise
+            # record every file under that link, so a path-keyed cache went
+            # stale the moment the link was renamed, analyze filed a second
+            # entry for one physical file, and write_tags mirrored the link's
+            # subfolder layout into the output.
+            real = os.path.realpath(dirpath)
             for n in sorted(names):
                 if n.lower().endswith(exts):
-                    yield os.path.join(dirpath, n)
+                    yield os.path.join(real, n)
