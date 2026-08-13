@@ -727,6 +727,317 @@ def write_generic(dst, fields, art_path, lyrics):
     return "written"
 
 
+def _id3_identity(t, txxx, ident):
+    """The name this file claims, written only when we trust one.
+
+    Every frame here is written when the fact is known and DELETED when it is
+    not, which is what lets a correction take a stale album, year or
+    recording ID back out of a file that already carried it."""
+    if ident:
+        t.setall("TIT2", [TIT2(encoding=3, text=[ident["display_title"]])])
+        # One joined string, NOT a multi-value frame: Samsung Music shows only
+        # the first value of a multi-value artist frame, which would hide the
+        # collaborator and break "find every Eminem track" searching.
+        t.setall("TPE1", [TPE1(encoding=3, text=["; ".join(ident["all_artists"])])])
+        # Machine-readable list for players that understand it.
+        txxx("ARTISTS", "\u0000".join(ident["all_artists"])
+             if len(ident["all_artists"]) > 1 else None)
+        # Every identity frame below is written when we know the fact and
+        # DELETED when we do not. Skipping instead of deleting left the
+        # source's own album, year or MusicBrainz ID in place, and a hint that
+        # changed the song could not take them back out, which is how a file
+        # ended up carrying one song's name and another song's recording ID.
+        if ident.get("album"):
+            t.setall("TALB", [TALB(encoding=3, text=[ident["album"]])])
+            # Album artist is the lead only, so albums group correctly.
+            t.setall("TPE2", [TPE2(encoding=3, text=[ident["lead_artist"]])])
+        else:
+            # TPE2 is deliberately left alone: it is how players group, it is
+            # the lead artist we write to TPE1 anyway, and it is not one of
+            # the facts a rejected match hands down.
+            t.delall("TALB")
+        if ident.get("year"):
+            t.setall("TDRC", [TDRC(encoding=3, text=[str(ident["year"])])])
+        else:
+            t.delall("TDRC")
+        t.delall("UFID:http://musicbrainz.org")
+        if ident.get("recording_id"):
+            t.add(UFID(owner="http://musicbrainz.org",
+                       data=str(ident["recording_id"]).encode()))
+        # Remix credit belongs in TPE4 ("interpreted/remixed by"), which is the
+        # standard frame players understand, not buried in the title.
+        if ident.get("remixer"):
+            t.setall("TPE4", [TPE4(encoding=3, text=[ident["remixer"]])])
+        else:
+            t.delall("TPE4")
+        # Facts the cascade resolved. ISRC is the useful one: it identifies
+        # this exact recording worldwide, so a future run can ask any service
+        # an exact question instead of guessing from a name.
+        if ident.get("isrc"):
+            t.setall("TSRC", [TSRC(encoding=3, text=[ident["isrc"]])])
+        else:
+            t.delall("TSRC")
+        if ident.get("label"):
+            t.setall("TPUB", [TPUB(encoding=3, text=[ident["label"]])])
+        else:
+            t.delall("TPUB")
+        if ident.get("track_number"):
+            total = ident.get("total_tracks")
+            t.setall("TRCK", [TRCK(encoding=3, text=[
+                f'{ident["track_number"]}/{total}' if total
+                else str(ident["track_number"])])])
+        else:
+            t.delall("TRCK")
+        if ident.get("disc_number"):
+            t.setall("TPOS", [TPOS(encoding=3, text=[str(ident["disc_number"])])])
+        else:
+            t.delall("TPOS")
+
+
+def _id3_audio(t, txxx, audio, extra):
+    """What the waveform says, written for every file.
+
+    This half cannot be wrong about which file it describes, so it is written
+    even when nobody knows the song's name."""
+    if audio.get("bpm"):
+        bpm = float(audio["bpm"])
+        t.setall("TBPM", [TBPM(encoding=3, text=[str(int(round(bpm)))])])
+        txxx("BPM_PRECISE", bpm)
+        txxx("BPM_VERDICT", audio.get("bpm_verdict"))
+        txxx("BPM_VOTES", audio.get("bpm_votes"))
+        # "disagree" is not an octave split -- the engines found genuinely
+        # different tempos. Neither value is trustworthy without a listen.
+        if audio.get("bpm_verdict") == "disagree":
+            txxx("BPM_UNRELIABLE", "engines disagree: "
+                 f"{audio.get('bpm_rhythm')}/{audio.get('bpm_degara')}/"
+                 f"{audio.get('bpm_percival')}")
+        # A hand-checked correction from config/bpm_overrides.json. The measured
+        # value stays in the file, so a wrong correction can be undone without
+        # re-analysing the audio.
+        if audio.get("bpm_override"):
+            txxx("BPM_OVERRIDE", audio["bpm_override"])
+            txxx("BPM_OVERRIDE_REASON", audio.get("bpm_override_reason"))
+            if audio.get("bpm_measured"):
+                txxx("BPM_MEASURED", audio["bpm_measured"])
+                txxx("BPM_VERIFIED",
+                     "reference" if audio.get("bpm_override_verified") else "genre")
+        # Cross-engine agreement cannot catch a half-time reading, because all
+        # three engines halve together (Basket Case reads 88, not ~170). 70-100
+        # is exactly where that is plausible, so publish the alternative and
+        # flag it rather than silently picking one. An override has already
+        # settled the question, so it suppresses the flag.
+        if 70 <= bpm < 100 and not audio.get("bpm_override"):
+            txxx("BPM_ALT", round(bpm * 2, 1))
+            txxx("BPM_AMBIGUOUS", "half-or-double")
+        elif bpm >= 160 and not audio.get("bpm_override"):
+            txxx("BPM_ALT", round(bpm / 2, 1))
+    if audio.get("key"):
+        scale = (audio.get("scale") or "")[:3]
+        t.setall("TKEY", [TKEY(encoding=3, text=[f"{audio['key']}{'m' if scale=='min' else ''}"])])
+    txxx("CAMELOT", audio.get("camelot"))
+    txxx("KEY_AGREEMENT", audio.get("key_agreement"))
+    txxx("KEY_STRENGTH", audio.get("key_strength"))
+    txxx("DANCEABILITY", audio.get("danceability"))
+    txxx("QUALITY", audio.get("quality_grade"))
+    if audio.get("truncated"):
+        txxx("TRUNCATED", f"decoded {audio.get('decoded_secs')}s of "
+                          f"{audio.get('header_secs')}s")
+    txxx("SPECTRAL_CUTOFF_HZ", audio.get("spectral_cutoff_hz"))
+    txxx("DYNAMIC_COMPLEXITY", audio.get("dynamic_complexity"))
+    # Unconditionally, before the write. txxx() overwrites but never deletes,
+    # and dst is not re-copied when it already exists, so anything a previous
+    # build or an upstream tagger wrote outlives us unless it is removed by
+    # name. RVA2 goes too: it is the other ID3 way to say the same thing, and
+    # mp3gain and Quod Libet read it in preference to TXXX.
+    #
+    # Outside the loudness test on purpose. A file we cannot measure is
+    # exactly the file most likely to be carrying somebody else's ReplayGain,
+    # and gating the deletion on having a replacement left every one of them
+    # with a foreign gain and no way to withdraw it.
+    for frame in list(t.getall("TXXX")):
+        if _is_rg_tag(frame.desc):
+            t.delall(f"TXXX:{frame.desc}")
+    t.delall("RVA2")
+    # Apple writes Sound Check as a COMM frame, not TXXX, so the loop above
+    # walks straight past it -- 23 files here carried one and kept it.
+    # Leaving it means two normalisation schemes in one file disagreeing.
+    for frame in list(t.getall("COMM")):
+        if _is_rg_tag(frame.desc):
+            t.delall(frame.HashKey)
+
+    if audio.get("loudness_lufs") is not None:
+        peak = audio.get("true_peak")
+        gain = rg_gain(audio["loudness_lufs"], peak)
+        txxx("REPLAYGAIN_TRACK_GAIN", f"{gain:.2f} dB")
+        if peak:
+            txxx("REPLAYGAIN_TRACK_PEAK", f"{float(peak):.6f}")
+        # Nothing in the file recorded which target produced the gain, so a
+        # later retag could not tell -14 LUFS values from -18 LUFS ones.
+        txxx("REPLAYGAIN_REFERENCE_LOUDNESS", f"{RG_TARGET_LUFS:.2f} LUFS")
+        txxx("LOUDNESS_LUFS", audio["loudness_lufs"])
+        # Album gain keeps relative levels WITHIN an album intact, so a quiet
+        # interlude stays quiet instead of being pushed up to match the singles.
+        # Track gain alone flattens that out.
+        if extra.get("album_gain") is not None:
+            txxx("REPLAYGAIN_ALBUM_GAIN", f"{extra['album_gain']:.2f} dB")
+            if extra.get("album_peak"):
+                txxx("REPLAYGAIN_ALBUM_PEAK",
+                     f"{float(extra['album_peak']):.6f}")
+
+
+def _id3_language(t, txxx, verified, lyrics):
+    """The language the lyrics are in, and how sure we are of it."""
+    lang, lang_conf = resolve_language(verified, lyrics)
+    if lang:
+        t.setall("TLAN", [TLAN(encoding=3, text=[lang])])
+        txxx("LANGUAGE_CONFIDENCE", lang_conf)
+
+
+def _id3_genre_and_art(t, txxx, ident, extra):
+    """One canonical genre and the cover art.
+
+    scenes.py knows things no catalogue does, so it outranks the genre it was
+    given as a floor."""
+    # ONE canonical genre. Writing three joined tags produced 113 distinct
+    # genre strings across 148 files, which makes a phone genre list useless.
+    primary, cleaned = canonical_genre(
+        extra.get("genres") or (ident or {}).get("genres"),
+        (ident or {}).get("title"))
+    # scenes.py knows things no catalogue does -- that Grse and z++ are one
+    # scene, that Prljavo kazaliste are two -- so it outranks the Deezer genre
+    # it was given as a floor.
+    if ident:
+        chosen, _why = scenes.genre_for(
+            ident.get("lead_artist") or ident.get("artist"),
+            ident.get("title"), ident.get("year"),
+            extra.get("discogs_styles"), primary)
+        extra_scenes = scenes.scenes_for(
+            ident.get("lead_artist") or ident.get("artist"), ident.get("year"))
+        if chosen:
+            # ID3v2.4 allows several values in one TCON. Players that show a
+            # single genre take the first, which is why the primary leads;
+            # players that show all of them get both scenes, which is what
+            # "in both" actually needs.
+            values = list(dict.fromkeys([chosen] + extra_scenes))
+            t.setall("TCON", [TCON(encoding=3, text=values)])
+            primary = chosen
+        else:
+            # Clear rather than leave: the output is written in place over the
+            # previous build, so a genre we no longer stand behind survives
+            # forever unless it is removed. That is how "Glee" and "Brcko"
+            # outlived the rule that stopped producing them.
+            t.delall("TCON")
+    elif primary:
+        t.setall("TCON", [TCON(encoding=3, text=[primary])])
+    if cleaned:
+        txxx("GENRES_ALL", "; ".join(cleaned))
+    # enrich.py's art first, then the cover the cascade resolved.
+    art = extra.get("art_path") or (ident or {}).get("art_path")
+    if art and os.path.exists(art):
+        t.delall("APIC")
+        with open(art, "rb") as fh:
+            t.add(APIC(encoding=3, mime="image/jpeg", type=3,
+                       desc="Cover", data=fh.read()))
+
+
+
+def _id3_lyrics(t, lyrics):
+    """The words, embedded. The .lrc sidecar beside the file is the other
+    carrier, and the only one Samsung Music reads.
+
+    The LRC-timestamped body goes in when we have it: players that support
+    synced lyrics parse the timestamps out of USLT and highlight each line.
+    Plain text there is what produced a flat, unscrolling list.
+    """
+    if not lyrics:
+        return
+    t.delall("USLT")
+    t.add(USLT(encoding=3, lang="und", desc="", text=lyrics))
+
+
+def _id3_youtube(t, txxx, extra):
+    """Where this audio came from, when a link says so with enough confidence.
+
+    A comment is only ours to remove if we wrote it: one that arrived on the
+    source file is that file's own provenance."""
+    # What the previous build claimed, read before it is cleared. A comment is
+    # only ours to remove if we are the ones who wrote it: a URL that came in
+    # on the source file is that file's own provenance and must survive
+    # untouched, including when this stage has no opinion at all.
+    was = t.getall("TXXX:YOUTUBE_TRUST")
+    prev_trust = str(was[0].text[0]) if was and was[0].text else None
+    # Cleared first, because txxx() no-ops on an empty value: a link we no
+    # longer stand behind would otherwise survive every later build, the same
+    # way a withdrawn genre outlived the rule that stopped producing it.
+    for frame in ("YOUTUBE_ID", "YOUTUBE_TRUST", "YOUTUBE_FROM"):
+        t.delall(f"TXXX:{frame}")
+    yt = extra.get("youtube") or {}
+    if yt.get("video_id"):
+        txxx("YOUTUBE_ID", yt["video_id"])
+        txxx("YOUTUBE_TRUST", yt.get("trust"))
+        txxx("YOUTUBE_FROM", yt.get("from"))
+    # Only origin evidence earns the comment field. Namida treats any URL it
+    # finds there as this track's video, so a search result -- which is a video
+    # OF the song rather than the source of these bytes -- must not go in it.
+    if yt.get("trust") == "origin":
+        prior = " ".join(str(c.text[0]) for c in t.getall("COMM")
+                         if getattr(c, "text", None))
+        # A comment that holds some other link is somebody's provenance note
+        # (two files here point at SoundCloud). Keep it rather than overwrite
+        # it; the 145 others say things like "converted by convert2mp3.net".
+        if prior and not _YT_IN_TEXT.search(prior) and _URL.search(prior):
+            txxx("PRIOR_COMMENT", prior)
+        t.delall("COMM")
+        t.add(COMM(encoding=3, lang="eng", desc="", text=[yt["url"]]))
+        # The standards-correct home for the same fact. Nothing reads it today,
+        # but it costs one frame and it is what WOAS is for.
+        t.delall("WOAS")
+        t.add(WOAS(url=yt["url"]))
+    elif prev_trust == "origin":
+        # An earlier build wrote that comment and this one no longer stands
+        # behind it. Take it back out, and put back whatever it displaced.
+        restore = t.getall("TXXX:PRIOR_COMMENT")
+        t.delall("COMM")
+        t.delall("WOAS")
+        t.delall("TXXX:PRIOR_COMMENT")
+        if restore and restore[0].text:
+            t.add(COMM(encoding=3, lang="eng", desc="",
+                       text=[str(restore[0].text[0])]))
+
+
+def _id3_provenance(t, txxx, src, ident, audio, verified, extra, trimmed, lrc_shift):
+    """What this build decided, so the next one can tell what to redo."""
+    fields = {**(ident or {}), "bpm": audio.get("bpm"), "key": audio.get("camelot")}
+    txxx("MUZZI_VERSION", VERSION)
+    txxx("MUZZI_DIGEST", digest(fields))
+    txxx("MUZZI_CONFIDENCE", ident.get("confidence") if ident else 0)
+    txxx("MUZZI_SOURCE", ident.get("source") if ident else "audio-only")
+    # Which file this was made from. It is what lets --prune tell a rename
+    # ("Amazing Lyrics - idfc x soap" becoming "Blackbear - idfc x soap") from
+    # a song that has genuinely disappeared, without loosening the check that
+    # stops the last copy of anything being deleted.
+    txxx("MUZZI_SOURCE_FILE", os.path.basename(src))
+    # Always written, including as "0.000": a file with no marker at all is one
+    # written before trimming existed, and write_one has to be able to tell
+    # that apart from a file deliberately left whole.
+    txxx("MUZZI_TRIM", f"{trimmed:.3f}")
+    if lrc_shift:
+        txxx("MUZZI_LRC_SHIFT", f"{lrc_shift:.2f}")
+    if verified and verified.get("verdict"):
+        txxx("MUZZI_LYRIC_VERDICT", verified["verdict"])
+        txxx("MUZZI_LYRIC_SCORE", verified.get("score"))
+    # Why a track has no lyrics, or no timings. Without this, "LRCLIB has
+    # nothing for this song" and "we refused what LRCLIB had" look identical
+    # from the outside, and the coverage figures cannot be read back.
+    #
+    # Cleared first: txxx() returns early on an empty value, so a track that
+    # was withheld on an earlier build and passes now would keep the old
+    # marker and read as still-refused.
+    t.delall("TXXX:MUZZI_LYRIC_WITHHELD")
+    if extra.get("lyric_reason"):
+        txxx("MUZZI_LYRIC_WITHHELD", extra["lyric_reason"])
+
+
 def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
               cut=0.0, lrc_shift=0.0):
     """-> the seconds actually cut off the front of the output copy."""
@@ -858,284 +1169,14 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
             return
         t.setall(f"TXXX:{desc}", [TXXX(encoding=3, desc=desc, text=[str(value)])])
 
-    # ---- identity (only when trusted) ----
-    if ident:
-        t.setall("TIT2", [TIT2(encoding=3, text=[ident["display_title"]])])
-        # One joined string, NOT a multi-value frame: Samsung Music shows only
-        # the first value of a multi-value artist frame, which would hide the
-        # collaborator and break "find every Eminem track" searching.
-        t.setall("TPE1", [TPE1(encoding=3, text=["; ".join(ident["all_artists"])])])
-        # Machine-readable list for players that understand it.
-        txxx("ARTISTS", "\u0000".join(ident["all_artists"])
-             if len(ident["all_artists"]) > 1 else None)
-        # Every identity frame below is written when we know the fact and
-        # DELETED when we do not. Skipping instead of deleting left the
-        # source's own album, year or MusicBrainz ID in place, and a hint that
-        # changed the song could not take them back out, which is how a file
-        # ended up carrying one song's name and another song's recording ID.
-        if ident.get("album"):
-            t.setall("TALB", [TALB(encoding=3, text=[ident["album"]])])
-            # Album artist is the lead only, so albums group correctly.
-            t.setall("TPE2", [TPE2(encoding=3, text=[ident["lead_artist"]])])
-        else:
-            # TPE2 is deliberately left alone: it is how players group, it is
-            # the lead artist we write to TPE1 anyway, and it is not one of
-            # the facts a rejected match hands down.
-            t.delall("TALB")
-        if ident.get("year"):
-            t.setall("TDRC", [TDRC(encoding=3, text=[str(ident["year"])])])
-        else:
-            t.delall("TDRC")
-        t.delall("UFID:http://musicbrainz.org")
-        if ident.get("recording_id"):
-            t.add(UFID(owner="http://musicbrainz.org",
-                       data=str(ident["recording_id"]).encode()))
-        # Remix credit belongs in TPE4 ("interpreted/remixed by"), which is the
-        # standard frame players understand, not buried in the title.
-        if ident.get("remixer"):
-            t.setall("TPE4", [TPE4(encoding=3, text=[ident["remixer"]])])
-        else:
-            t.delall("TPE4")
-        # Facts the cascade resolved. ISRC is the useful one: it identifies
-        # this exact recording worldwide, so a future run can ask any service
-        # an exact question instead of guessing from a name.
-        if ident.get("isrc"):
-            t.setall("TSRC", [TSRC(encoding=3, text=[ident["isrc"]])])
-        else:
-            t.delall("TSRC")
-        if ident.get("label"):
-            t.setall("TPUB", [TPUB(encoding=3, text=[ident["label"]])])
-        else:
-            t.delall("TPUB")
-        if ident.get("track_number"):
-            total = ident.get("total_tracks")
-            t.setall("TRCK", [TRCK(encoding=3, text=[
-                f'{ident["track_number"]}/{total}' if total
-                else str(ident["track_number"])])])
-        else:
-            t.delall("TRCK")
-        if ident.get("disc_number"):
-            t.setall("TPOS", [TPOS(encoding=3, text=[str(ident["disc_number"])])])
-        else:
-            t.delall("TPOS")
-
-    # ---- audio-derived (always) ----
-    if audio.get("bpm"):
-        bpm = float(audio["bpm"])
-        t.setall("TBPM", [TBPM(encoding=3, text=[str(int(round(bpm)))])])
-        txxx("BPM_PRECISE", bpm)
-        txxx("BPM_VERDICT", audio.get("bpm_verdict"))
-        txxx("BPM_VOTES", audio.get("bpm_votes"))
-        # "disagree" is not an octave split -- the engines found genuinely
-        # different tempos. Neither value is trustworthy without a listen.
-        if audio.get("bpm_verdict") == "disagree":
-            txxx("BPM_UNRELIABLE", "engines disagree: "
-                 f"{audio.get('bpm_rhythm')}/{audio.get('bpm_degara')}/"
-                 f"{audio.get('bpm_percival')}")
-        # A hand-checked correction from config/bpm_overrides.json. The measured
-        # value stays in the file, so a wrong correction can be undone without
-        # re-analysing the audio.
-        if audio.get("bpm_override"):
-            txxx("BPM_OVERRIDE", audio["bpm_override"])
-            txxx("BPM_OVERRIDE_REASON", audio.get("bpm_override_reason"))
-            if audio.get("bpm_measured"):
-                txxx("BPM_MEASURED", audio["bpm_measured"])
-                txxx("BPM_VERIFIED",
-                     "reference" if audio.get("bpm_override_verified") else "genre")
-        # Cross-engine agreement cannot catch a half-time reading, because all
-        # three engines halve together (Basket Case reads 88, not ~170). 70-100
-        # is exactly where that is plausible, so publish the alternative and
-        # flag it rather than silently picking one. An override has already
-        # settled the question, so it suppresses the flag.
-        if 70 <= bpm < 100 and not audio.get("bpm_override"):
-            txxx("BPM_ALT", round(bpm * 2, 1))
-            txxx("BPM_AMBIGUOUS", "half-or-double")
-        elif bpm >= 160 and not audio.get("bpm_override"):
-            txxx("BPM_ALT", round(bpm / 2, 1))
-    if audio.get("key"):
-        scale = (audio.get("scale") or "")[:3]
-        t.setall("TKEY", [TKEY(encoding=3, text=[f"{audio['key']}{'m' if scale=='min' else ''}"])])
-    txxx("CAMELOT", audio.get("camelot"))
-    txxx("KEY_AGREEMENT", audio.get("key_agreement"))
-    txxx("KEY_STRENGTH", audio.get("key_strength"))
-    txxx("DANCEABILITY", audio.get("danceability"))
-    txxx("QUALITY", audio.get("quality_grade"))
-    if audio.get("truncated"):
-        txxx("TRUNCATED", f"decoded {audio.get('decoded_secs')}s of "
-                          f"{audio.get('header_secs')}s")
-    txxx("SPECTRAL_CUTOFF_HZ", audio.get("spectral_cutoff_hz"))
-    txxx("DYNAMIC_COMPLEXITY", audio.get("dynamic_complexity"))
-    # Unconditionally, before the write. txxx() overwrites but never deletes,
-    # and dst is not re-copied when it already exists, so anything a previous
-    # build or an upstream tagger wrote outlives us unless it is removed by
-    # name. RVA2 goes too: it is the other ID3 way to say the same thing, and
-    # mp3gain and Quod Libet read it in preference to TXXX.
-    #
-    # Outside the loudness test on purpose. A file we cannot measure is
-    # exactly the file most likely to be carrying somebody else's ReplayGain,
-    # and gating the deletion on having a replacement left every one of them
-    # with a foreign gain and no way to withdraw it.
-    for frame in list(t.getall("TXXX")):
-        if _is_rg_tag(frame.desc):
-            t.delall(f"TXXX:{frame.desc}")
-    t.delall("RVA2")
-    # Apple writes Sound Check as a COMM frame, not TXXX, so the loop above
-    # walks straight past it -- 23 files here carried one and kept it.
-    # Leaving it means two normalisation schemes in one file disagreeing.
-    for frame in list(t.getall("COMM")):
-        if _is_rg_tag(frame.desc):
-            t.delall(frame.HashKey)
-
-    if audio.get("loudness_lufs") is not None:
-        peak = audio.get("true_peak")
-        gain = rg_gain(audio["loudness_lufs"], peak)
-        txxx("REPLAYGAIN_TRACK_GAIN", f"{gain:.2f} dB")
-        if peak:
-            txxx("REPLAYGAIN_TRACK_PEAK", f"{float(peak):.6f}")
-        # Nothing in the file recorded which target produced the gain, so a
-        # later retag could not tell -14 LUFS values from -18 LUFS ones.
-        txxx("REPLAYGAIN_REFERENCE_LOUDNESS", f"{RG_TARGET_LUFS:.2f} LUFS")
-        txxx("LOUDNESS_LUFS", audio["loudness_lufs"])
-        # Album gain keeps relative levels WITHIN an album intact, so a quiet
-        # interlude stays quiet instead of being pushed up to match the singles.
-        # Track gain alone flattens that out.
-        if extra.get("album_gain") is not None:
-            txxx("REPLAYGAIN_ALBUM_GAIN", f"{extra['album_gain']:.2f} dB")
-            if extra.get("album_peak"):
-                txxx("REPLAYGAIN_ALBUM_PEAK",
-                     f"{float(extra['album_peak']):.6f}")
-
-    # ---- language ----
-    lang, lang_conf = resolve_language(verified, lyrics)
-    if lang:
-        t.setall("TLAN", [TLAN(encoding=3, text=[lang])])
-        txxx("LANGUAGE_CONFIDENCE", lang_conf)
-
-    # ---- genre + embedded art ----
-    # ONE canonical genre. Writing three joined tags produced 113 distinct
-    # genre strings across 148 files, which makes a phone genre list useless.
-    primary, cleaned = canonical_genre(
-        extra.get("genres") or (ident or {}).get("genres"),
-        (ident or {}).get("title"))
-    # scenes.py knows things no catalogue does -- that Grse and z++ are one
-    # scene, that Prljavo kazaliste are two -- so it outranks the Deezer genre
-    # it was given as a floor.
-    if ident:
-        chosen, _why = scenes.genre_for(
-            ident.get("lead_artist") or ident.get("artist"),
-            ident.get("title"), ident.get("year"),
-            extra.get("discogs_styles"), primary)
-        extra_scenes = scenes.scenes_for(
-            ident.get("lead_artist") or ident.get("artist"), ident.get("year"))
-        if chosen:
-            # ID3v2.4 allows several values in one TCON. Players that show a
-            # single genre take the first, which is why the primary leads;
-            # players that show all of them get both scenes, which is what
-            # "in both" actually needs.
-            values = list(dict.fromkeys([chosen] + extra_scenes))
-            t.setall("TCON", [TCON(encoding=3, text=values)])
-            primary = chosen
-        else:
-            # Clear rather than leave: the output is written in place over the
-            # previous build, so a genre we no longer stand behind survives
-            # forever unless it is removed. That is how "Glee" and "Brcko"
-            # outlived the rule that stopped producing them.
-            t.delall("TCON")
-    elif primary:
-        t.setall("TCON", [TCON(encoding=3, text=[primary])])
-    if cleaned:
-        txxx("GENRES_ALL", "; ".join(cleaned))
-    # enrich.py's art first, then the cover the cascade resolved.
-    art = extra.get("art_path") or (ident or {}).get("art_path")
-    if art and os.path.exists(art):
-        t.delall("APIC")
-        with open(art, "rb") as fh:
-            t.add(APIC(encoding=3, mime="image/jpeg", type=3,
-                       desc="Cover", data=fh.read()))
-
-    if lyrics:
-        # Embed the LRC-timestamped body when we have it: players that support
-        # synced lyrics parse the timestamps out of USLT and highlight each
-        # line. Plain text there is what produced a flat, unscrolling list.
-        t.delall("USLT")
-        t.add(USLT(encoding=3, lang="und", desc="", text=lyrics))
-
-    # ---- where this audio came from ----
-    # What the previous build claimed, read before it is cleared. A comment is
-    # only ours to remove if we are the ones who wrote it: a URL that came in
-    # on the source file is that file's own provenance and must survive
-    # untouched, including when this stage has no opinion at all.
-    was = t.getall("TXXX:YOUTUBE_TRUST")
-    prev_trust = str(was[0].text[0]) if was and was[0].text else None
-    # Cleared first, because txxx() no-ops on an empty value: a link we no
-    # longer stand behind would otherwise survive every later build, the same
-    # way a withdrawn genre outlived the rule that stopped producing it.
-    for frame in ("YOUTUBE_ID", "YOUTUBE_TRUST", "YOUTUBE_FROM"):
-        t.delall(f"TXXX:{frame}")
-    yt = extra.get("youtube") or {}
-    if yt.get("video_id"):
-        txxx("YOUTUBE_ID", yt["video_id"])
-        txxx("YOUTUBE_TRUST", yt.get("trust"))
-        txxx("YOUTUBE_FROM", yt.get("from"))
-    # Only origin evidence earns the comment field. Namida treats any URL it
-    # finds there as this track's video, so a search result -- which is a video
-    # OF the song rather than the source of these bytes -- must not go in it.
-    if yt.get("trust") == "origin":
-        prior = " ".join(str(c.text[0]) for c in t.getall("COMM")
-                         if getattr(c, "text", None))
-        # A comment that holds some other link is somebody's provenance note
-        # (two files here point at SoundCloud). Keep it rather than overwrite
-        # it; the 145 others say things like "converted by convert2mp3.net".
-        if prior and not _YT_IN_TEXT.search(prior) and _URL.search(prior):
-            txxx("PRIOR_COMMENT", prior)
-        t.delall("COMM")
-        t.add(COMM(encoding=3, lang="eng", desc="", text=[yt["url"]]))
-        # The standards-correct home for the same fact. Nothing reads it today,
-        # but it costs one frame and it is what WOAS is for.
-        t.delall("WOAS")
-        t.add(WOAS(url=yt["url"]))
-    elif prev_trust == "origin":
-        # An earlier build wrote that comment and this one no longer stands
-        # behind it. Take it back out, and put back whatever it displaced.
-        restore = t.getall("TXXX:PRIOR_COMMENT")
-        t.delall("COMM")
-        t.delall("WOAS")
-        t.delall("TXXX:PRIOR_COMMENT")
-        if restore and restore[0].text:
-            t.add(COMM(encoding=3, lang="eng", desc="",
-                       text=[str(restore[0].text[0])]))
-
-    # ---- provenance ----
-    fields = {**(ident or {}), "bpm": audio.get("bpm"), "key": audio.get("camelot")}
-    txxx("MUZZI_VERSION", VERSION)
-    txxx("MUZZI_DIGEST", digest(fields))
-    txxx("MUZZI_CONFIDENCE", ident.get("confidence") if ident else 0)
-    txxx("MUZZI_SOURCE", ident.get("source") if ident else "audio-only")
-    # Which file this was made from. It is what lets --prune tell a rename
-    # ("Amazing Lyrics - idfc x soap" becoming "Blackbear - idfc x soap") from
-    # a song that has genuinely disappeared, without loosening the check that
-    # stops the last copy of anything being deleted.
-    txxx("MUZZI_SOURCE_FILE", os.path.basename(src))
-    # Always written, including as "0.000": a file with no marker at all is one
-    # written before trimming existed, and write_one has to be able to tell
-    # that apart from a file deliberately left whole.
-    txxx("MUZZI_TRIM", f"{trimmed:.3f}")
-    if lrc_shift:
-        txxx("MUZZI_LRC_SHIFT", f"{lrc_shift:.2f}")
-    if verified and verified.get("verdict"):
-        txxx("MUZZI_LYRIC_VERDICT", verified["verdict"])
-        txxx("MUZZI_LYRIC_SCORE", verified.get("score"))
-    # Why a track has no lyrics, or no timings. Without this, "LRCLIB has
-    # nothing for this song" and "we refused what LRCLIB had" look identical
-    # from the outside, and the coverage figures cannot be read back.
-    #
-    # Cleared first: txxx() returns early on an empty value, so a track that
-    # was withheld on an earlier build and passes now would keep the old
-    # marker and read as still-refused.
-    t.delall("TXXX:MUZZI_LYRIC_WITHHELD")
-    if extra.get("lyric_reason"):
-        txxx("MUZZI_LYRIC_WITHHELD", extra["lyric_reason"])
-
+    _id3_identity(t, txxx, ident)
+    _id3_audio(t, txxx, audio, extra)
+    _id3_language(t, txxx, verified, lyrics)
+    _id3_genre_and_art(t, txxx, ident, extra)
+    _id3_lyrics(t, lyrics)
+    _id3_youtube(t, txxx, extra)
+    _id3_provenance(t, txxx, src, ident, audio, verified, extra, trimmed,
+                    lrc_shift)
     # ID3v2.4: Samsung's own guidance says v2.4 is reliably supported while
     # v2.3 "may encounter display issues, such as incorrect character
     # rendering" -- which matters for c/s/z with diacritics. v2.4 also carries
