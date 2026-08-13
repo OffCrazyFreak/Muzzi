@@ -474,6 +474,17 @@ tempo-matching by feel is the point. Deezer publishes a tempo for about a third
 of tracks; where it disagrees by something other than an octave it has been
 right every time it could be checked by hand, so those are corrected outright.
 
+**An ISRC is exact about the recording and not about the row that holds it.**
+`Counting Stars` resolves to four MusicBrainz recordings under one ISRC, and
+MusicBrainz documents no order for that list, so taking the first picked an
+arbitrary one and picked a different one on different days. That is worse than
+it sounds, because `recording_id` is the key the next lookup uses for album,
+year, genres and the release group, and one of Bon Jovi's "It's My Life" ISRCs
+resolves to a radio live session. The recording is therefore chosen: one that
+agrees with the name already held, never one that is a different version of it,
+and the MBID breaks the remaining tie so the same question gets the same answer
+twice.
+
 **Version markers are never crossed.** `Animals` and `Animals (Balkanik Remix)`
 are two songs. Searches that strip `(Remix)`, `(Cover)` or `prod. by` to widen
 a query get their results checked for the marker before anything is believed --

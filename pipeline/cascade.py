@@ -257,12 +257,53 @@ def r_mb_recording(fx, ctx):
 
 
 def r_mb_by_isrc(fx, ctx):
-    """ISRC -> the exact MusicBrainz recording, no name matching involved."""
+    """ISRC -> the MusicBrainz recording, chosen rather than taken first.
+
+    An ISRC is exact about the recording it names and is not exact about which
+    MusicBrainz row holds it: "Counting Stars" resolves to four, and MusicBrainz
+    documents no order for that list. Taking `recordings[0]` therefore picked an
+    arbitrary one, and picked a different one on different days: two runs of
+    identical code minutes apart chose `d03a0d3b` and `215d1841` for the same
+    ISRC (#65).
+
+    Arbitrary is worse than it sounds, because `recording_id` is the key
+    `mb-recording` then uses for album, year, genres and the release group. One
+    of Bon Jovi's "It's My Life" ISRCs resolves to a radio live session, so the
+    wrong row here quietly retags the song after a live take.
+
+    So: prefer a recording that agrees with the name we already hold, refuse one
+    that is a different version of it, and break the remaining tie on the MBID
+    so the same question gets the same answer twice.
+    """
     d = mb_get(ctx, f"{MB}/isrc/{fx.get('isrc')}",
                {"fmt": "json", "inc": "artist-credits"}, fx, "mb-by-isrc")
     recs = (d or {}).get("recordings") or []
-    if recs:
-        fx.put("recording_id", recs[0].get("id"), "musicbrainz")
+    if not recs:
+        return
+    ours = fx.get("title")
+
+    def score(rec):
+        title = rec.get("title") or ""
+        names = ", ".join(
+            c["artist"]["name"] for c in (rec.get("artist-credit") or [])
+            if isinstance(c, dict) and c.get("artist"))
+        # A live take offered for a studio track is not a tie-break, it is the
+        # wrong recording, so it sorts below everything that is not.
+        wrong = bool(ours and version_mismatch(ours, title))
+        return (not wrong,
+                round(fit(ours, title), 3) if ours else 0.0,
+                round(fit(fx.get("artist"), names), 3) if fx.get("artist")
+                else 0.0,
+                # Descending id, because the whole tuple is compared with max.
+                # Any total order does for reproducibility; this one is stable
+                # across runs, machines and MusicBrainz's own ordering.
+                [-ord(c) for c in (rec.get("id") or "")])
+
+    best = max(recs, key=score)
+    if len(recs) > 1:
+        fx.log.append(f"isrc {fx.get('isrc')} names {len(recs)} recordings, "
+                      f"chose {best.get('title')!r}")
+    fx.put("recording_id", best.get("id"), "musicbrainz")
 
 
 def r_deezer_by_isrc(fx, ctx):
