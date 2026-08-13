@@ -191,7 +191,16 @@ def _get(session, path, params):
     """-> ("ok", payload) | ("absent", None) | ("error", None).
 
     'absent' means LRCLIB answered and had nothing. Only that is safe to cache.
+
+    A 404 is the absence, and it is the one response here that means the
+    catalogue was consulted. When LRCLIB itself is not answering, every query
+    fails the same way and the distinction is worth nothing, so the run is
+    stopped from asking rather than left to record an outage a track at a
+    time.
     """
+    from pipeline import health
+    if health.blocked("lrclib"):
+        return "error", None
     for attempt in range(MAX_RETRIES):
         _throttle()
         try:

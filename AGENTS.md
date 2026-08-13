@@ -87,7 +87,14 @@ different rule when the code is ambiguous.
 - Truncate a fingerprint to use as a cache key. Prefixes collide, silently.
 - Run `dedupe` before `analyze`. dedupe picks the copy to keep by measured
   spectral cutoff, so it needs the current `analysis.json`.
-- Cache a failed request as a real answer.
+- Cache a failed request as a real answer. `pipeline/health.py` asks each
+  source one question whose answer is already known, once per run, and a
+  source that cannot answer it is not asked about your music. A source that is
+  down shrinks the quorum denominator rather than abstaining into agreement,
+  and a conclusion reached while one was down is provisional until it is
+  reachable again. Adding a source means adding a probe: one that checks the
+  answer, not the status code, because Deezer returns 200 with an error body
+  and iTunes returns 200 with no results when it is throttling.
 - Hardcode parallelism. Derive it from CPU count and available RAM at runtime:
   this runs on a laptop and on a VPS.
 - Poll with a pattern that matches your own process. `pgrep -f` and `pkill -f`
