@@ -689,8 +689,6 @@ def _video_id(url):
     return cache_key(url)
 
 
-# Wording that means the cell is a message to me, not a song title.
-
 def parse_hint(hint):
     """-> ("confirm"|"reject"|"override"|"url"|None, payload).
 
