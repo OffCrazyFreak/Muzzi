@@ -745,7 +745,7 @@ $EDITOR baseline/m4a-genres/targets.txt                     # BEFORE the change
 $P tools/snapshot.py --issue m4a-genres --label before
 # ... make the change ...
 $P tools/snapshot.py --issue m4a-genres --label after
-$P tools/snapdiff.py --issue m4a-genres
+$P tools/snapdiff.py --issue m4a-genres --by-cohort
 ```
 
 `snapdiff.py` sorts every difference into **fixed** (declared and changed),
@@ -760,6 +760,22 @@ success as a regression.
 Declaring the targets first is what makes any of this possible: without an
 intent to compare against, a diff can only say what moved, not whether it
 should have.
+
+`--by-cohort` splits every one of those counts twice: by artist locale
+(Balkan or not, using the same `likely_balkan` heuristic the pipeline itself
+uses, imported rather than reimplemented) and by container. A change can
+improve the totals while making half the library worse, and these are the two
+halves it happens on. m4a is a quarter of these files and the MP4 tag path has
+silently written fewer tags than the MP3 one before; the Balkan tracks are the
+ones MusicBrainz, Last.fm and every lyric database are thinnest on, so a new
+source that helps the English-language half and does nothing for the rest
+reads as an improvement until the split is visible.
+
+It also counts **false auto-accepts**: rows that were tiered `auto`, meaning
+the pipeline said it did not need you, and whose artist or title then moved.
+That number is the one worth reading first. A track going to review is
+annoying; a track shipping a wrong artist without anyone being asked is the
+failure everything else here is arranged to prevent.
 
 `--level cache` (the default) reads the stage caches and takes seconds.
 `--level out` reads what actually landed in `out/_all`: filenames, tags, the

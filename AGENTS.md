@@ -203,9 +203,17 @@ that prompted the fix. Run these with `./.venv/bin/python`, like every stage.
    `--label after`. Add `--level out` when the fix touches what gets written;
    build that output with `write_tags.py --only baseline/SLUG/paths.txt
    --out <your worktree>/out/_all`.
-4. `tools/snapdiff.py --issue SLUG`. **Missed** means the fix did nothing.
-   **Collateral** means it broke something else. Both are failures. Quote the
-   counts in the PR.
+4. `tools/snapdiff.py --issue SLUG --by-cohort`. **Missed** means the fix did
+   nothing. **Collateral** means it broke something else. Both are failures.
+   Quote the counts in the PR.
+
+`--by-cohort` splits every count by artist locale (Balkan or not) and by
+container. A total can improve while half the library gets worse, and those
+are the two halves it happens on: m4a is a quarter of these files, and the
+Balkan tracks are the ones every external catalogue is thinnest on. Quote the
+split, not just the total. **False auto-accepts** is the line to read first:
+a row that was auto-accepted and whose artist or title moved anyway shipped
+wrong without anyone being asked to look at it.
 
 ## Commits
 
