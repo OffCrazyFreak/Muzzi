@@ -723,7 +723,7 @@ session teardown kills it mid-run.
 run.py                  the only entry point you need
 pipeline/               one file per stage, each runnable alone
 tools/                  standalone helpers (sample, snapshot, snapdiff,
-                        relocate)
+                        relocate, explain)
 config/                 keys and hand-maintained corrections
                         (config.yaml is yours and gitignored: if you
                         have one from before the rename, point its
@@ -847,6 +847,45 @@ the same way `hints.tsv` does. Delete `baseline/<issue>/` when the issue is
 closed.
 
 ---
+
+## Why a track says what it says
+
+The stage caches hold conclusions: one artist, one album, one lyric sheet.
+That is enough to tag a file and not enough to know how much to trust it,
+because three catalogues agreeing and one catalogue answering alone look
+identical once the losers have been thrown away.
+
+`cache/evidence.db` keeps the answers instead. One row per source per
+question, never collapsed:
+
+```bash
+./.venv/bin/python pipeline/evidence.py --backfill   # seed from the caches
+./.venv/bin/python tools/explain.py "Colonia - Najbolje"
+./.venv/bin/python tools/explain.py "Elitni Odredi" --field artist
+```
+
+Agreement is counted in **independence families**, not in sources. The Cover
+Art Archive is MusicBrainz's own artwork store and AcoustID resolves to
+MusicBrainz recordings, so neither corroborates MusicBrainz; YouTube Music is
+YouTube's catalogue with better metadata, so an Art Track and its own video
+are one upload seen twice. Counting endpoints instead of families is how
+"three sources agree" comes to mean "one database was read three ways".
+
+AcoustID is deliberately in two places at once. The fingerprint match is
+evidence from the audio and owes nothing to any catalogue; the artist name it
+returns came out of MusicBrainz. So the family says where the data came from
+and a separate flag says whether it came from the audio, because one label per
+source cannot say both.
+
+A row also records **which question was asked**. A miss belongs to the query,
+not to the song: Genius having nothing for `Djordje Balasevic` says nothing
+about `Đorđe Balašević`, and when an alias turns up later that is a new
+question rather than a settled absence. And an absence is not a failure: an
+earlier lyric fetcher cached 132 failed requests as real answers, and every
+one of those tracks was treated as having no lyrics from then on.
+
+Nothing here decides anything, and no conclusion is written back, so a fact
+that arrives later cannot leave a stale decision behind it.
 
 ## Auditing what was written
 
