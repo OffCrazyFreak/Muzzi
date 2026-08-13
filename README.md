@@ -33,10 +33,16 @@ input/             put your music folders here, or symlink them:
 
 ## What it produces
 
+> Upgrading from a version that wrote `out/`? Rename the folder,
+> `mv out output`, and point `config/config.yaml`'s `directory:` at
+> `../output/_all`. Both are yours and gitignored, so nothing here can do it
+> for you, and leaving the old tree in place means a second full copy that
+> `--prune` cannot see: it only knows about the folder it was told to write.
+
 ```
-output/_all/          one copy of every song, tagged, in the same subfolder
+output/_all/       one copy of every song, tagged, in the same subfolder
                    layout as your sources; a .lrc sidecar next to each
-output/playlists/     .m3u by BPM band, decade, language, mood, quality, and
+output/playlists/  .m3u by BPM band, decade, language, mood, quality, and
                    the hand-curated scenes; 15 tracks minimum, except
                    Language, which is kept whatever its size
 review/            numbered spreadsheets, only what needs your eyes
@@ -713,16 +719,19 @@ pipeline/               one file per stage, each runnable alone
 tools/                  standalone helpers (sample, snapshot, snapdiff,
                         relocate)
 config/                 keys and hand-maintained corrections
+                        (config.yaml is yours and gitignored: if you
+                        have one from before the rename, point its
+                        `directory:` at ../output/_all)
 cache/                  every stage's output; safe to delete, expensive to rebuild
-output/_all                the result
-output/playlists           .m3u playlists
+output/_all             the result
+output/playlists        .m3u playlists
 review/                 numbered spreadsheets, only what needs your eyes
 baseline/               frozen verification samples and before/after snapshots
 hints.tsv               every answer you have ever given
 ```
 
 Everything below `run.py` in that list is created at runtime and none of it is
-in the repository - `cache/`, `out/`, `review/`, `hints.tsv`, the venv, the
+in the repository - `cache/`, `output/`, `review/`, `hints.tsv`, the venv, the
 `fpcalc` binary and the Whisper weights are all gitignored. A clone is the code
 and the curated config, nothing else. That is deliberate: `hints.tsv` and the
 tagged output describe a specific person's music library.
@@ -824,8 +833,8 @@ records a build that has nothing to do with the one just made.
 Pointed at the main checkout's `output/_all`, which every session shares,
 `snapshot.py` refuses unless you pass `--allow-shared-read`. That check
 recognises the shared output whether it sits inside the checkout or is a
-symlink to another filesystem, so moving `out/` to a bigger partition does not
-quietly switch the guard off.
+symlink to another filesystem, so moving `output/` to a bigger partition does
+not quietly switch the guard off.
 
 `baseline/` is gitignored: it lists real filenames, so it describes the library
 the same way `hints.tsv` does. Delete `baseline/<issue>/` when the issue is

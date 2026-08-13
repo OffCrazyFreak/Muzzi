@@ -22,7 +22,7 @@ if the description says "also", split it.
 - [ ] `ruff check .` passes
 - [ ] I said which commands I ran and which I did not
 - [ ] No personal data: no audio, artwork, lyrics, `hints.tsv`, `review/`,
-      `cache/`, `out/`, or filled-in config
+      `cache/`, `output/`, or filled-in config
 - [ ] Source folders were not written to
 - [ ] Every surface covered: both containers, both lyric carriers, both BPM
       carriers, both playlist forms

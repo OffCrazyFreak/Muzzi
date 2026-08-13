@@ -3,7 +3,7 @@
 # enforced, so a diff stays about behaviour and CI stays honest about failing.
 target-version = "py311"
 line-length = 100
-exclude = ["bin", "cache", "features", "models", "out", "redownloaded", "review"]
+exclude = ["bin", "cache", "features", "models", "output", "redownloaded", "review"]
 
 [lint]
 select = ["E9", "F"]

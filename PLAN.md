@@ -53,7 +53,8 @@ hint resolution all ship today.
 
 **A. Write the tags** (the actual deliverable)
 Everything computed so far lives in `cache/`. Write it into ID3 on copies in
-`output/_all/`: artist, title, album, year, genre, BPM, TKEY, Camelot, ReplayGain
+`output/_all/`: artist, title, album, year, genre, BPM, TKEY, Camelot,
+ReplayGain
 (track and album gain, true peak, and the reference loudness they were computed
 against), quality grade, language. Originals never touched.
 
@@ -69,7 +70,8 @@ re-run, and a file that slipped in unprocessed is detected immediately.
 (Built as `MUZZI_*`, not the `TEMPO_*` this originally proposed.)
 
 **D. Crate export**
-`out/crates/` folders (BPM bands, language, mood, remixes) plus M3U playlists.
+`output/crates/` folders (BPM bands, language, mood, remixes) plus M3U
+playlists.
 Folders are the guaranteed-portable option; M3U is nicer where the player
 supports it. Then a 10-file test on the S24 FE before committing to either.
 

@@ -52,9 +52,15 @@ __pycache__/
 *.mp3
 *.m4a
 *.flac
+*.aac
 *.ogg
+*.oga
 *.opus
 *.wav
+*.mp4
+*.3gp
+*.3ga
+*.webm
 *.lrc
 *.m3u
 *.ods
