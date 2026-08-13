@@ -71,7 +71,7 @@ _CRUFT_TOKEN = re.compile(
 _GROUP = re.compile(r"[\(\[]([^()\[\]]*)[\)\]]")
 # What separates tokens inside a group. "/" is here, and only here: a slash
 # between two cruft words is punctuation, while AC/DC and Love/Hate are names.
-_IN_GROUP_SEP = re.compile(r"[\s/,|.–—_+-]+")
+_IN_GROUP_SEP = re.compile(r"[\s/,;:|.–—_+-]+")
 
 
 def _drop_cruft_groups(title):
@@ -84,7 +84,10 @@ def _drop_cruft_groups(title):
     """
     def repl(m):
         toks = [t for t in _IN_GROUP_SEP.split(m.group(1)) if t]
-        if toks and all(_CRUFT_TOKEN.match(t) for t in toks):
+        # "not toks" as well: a nested group whose inside was already removed
+        # leaves an empty one behind, and "Song [ ]" is not a cleaner title
+        # than "Song [(Lyrics/Tekst)]" was.
+        if not toks or all(_CRUFT_TOKEN.match(t) for t in toks):
             return " "
         return m.group(0)
 
