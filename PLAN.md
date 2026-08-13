@@ -168,6 +168,23 @@ identical to a wrong song. Low means "unverified", not "wrong".
   floor.
 - **Rotating IPs** to beat MusicBrainz's 1 req/s is abuse of a donated service.
   The legitimate answer is a local mirror (~100 GB db-only, 350 GB full).
+- **NetEase Cloud Music** was measured as a second lyric source and dropped.
+  Not because it has nothing: because it answers **HTTP 200, `code: 200`, and
+  well-formed JSON containing results that have nothing to do with the query**.
+  Searching `Taylor Swift Love Story` returns Jay Chou's 双截棍, and
+  `Rick Astley Never Gonna Give You Up` returns 一生所爱. Ten hits every
+  time, each with real timed lyrics attached. Over 80 sampled tracks, 40
+  Balkan and 40 not, it matched **zero** in either cohort, and only the
+  existing `fit()` name check stopped it reporting Chinese pop lyrics as
+  answers. This is the most dangerous shape a source can fail in, and it is
+  why `pipeline/health.py` probes check the *answer*, not the status code.
+- **Megalobiz** does not respond at all from here. Not a timeout under load:
+  the connection is refused outright, on the root as well as on a search.
+- **`syncedlyrics`** would have wrapped both. It is MIT and it works, but it
+  has had no release in twelve months and already ships two providers its own
+  README calls broken. A dormant wrapper around sources that fail silently
+  hides the failure behind one more layer, which is the opposite of what
+  `health.py` is for.
 
 ---
 
