@@ -142,7 +142,13 @@ def download(vid, dest_stem):
             # would be unmeasurable AND unplayable. The Opus stream is ~136k
             # against AAC's ~130k -- six kilobits is not worth a file that
             # does not open on the device this library exists for.
-            ["yt-dlp", "--no-warnings", "--no-playlist", "-f",
+            # --embed-metadata so the file carries the video it came from. On
+            # m4a that lands in the native comment atom, which is where
+            # tagseed.py reads a video id back out of a source file -- so a
+            # redownloaded track states its own provenance without depending on
+            # this report still existing.
+            ["yt-dlp", "--no-warnings", "--no-playlist", "--embed-metadata",
+             "-f",
              "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio", "-o", tmpl,
              f"https://music.youtube.com/watch?v={vid}"],
             capture_output=True, text=True, timeout=300)

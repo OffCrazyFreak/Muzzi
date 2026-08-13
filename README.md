@@ -205,7 +205,7 @@ Then `verify` reads the output back and reports what still needs you.
 6.  webmatch -> review
 7.  cascade -> fetch_art -> ...     ║  lyrics_fetch -> ... -> lyric_align
 8.  review
-9.  artist_names -> origin -> lastfm_tags -> dedupe_names
+9.  artist_names -> origin -> lastfm_tags -> dedupe_names -> yt_links
 10. write_tags -> export -> verify
 ```
 
@@ -263,6 +263,7 @@ can't be wrong about which file it's describing:
 | `review` | scores everything 0-1 with explicit reasons, applies your hints, sorts into auto / review / suspect, writes the spreadsheets |
 | `artist_names` | one spelling per artist: Cyrillic to Latin, channel suffixes off, ALL CAPS down, and typos merged into the confirmed spelling |
 | `dedupe_names` | duplicates fingerprinting can't see -- two YouTube uploads of one song are different recordings, so only the name pairs them |
+| `yt_links` | which YouTube video each file came from, merged from every source that knows and tiered by how much it can be trusted |
 | `write_tags` | copies to `out/_all` and writes every tag, plus `MUZZI_*` provenance stamps. `--prune` deletes output left over from an earlier build |
 | `export` | playlists |
 | `verify` | reads the output back and reports what needs attention |
@@ -284,6 +285,12 @@ there is nothing left to answer.
 | `1 - needs a link.ods` | nothing found anywhere | a URL |
 | `2 - confirm the name.ods` | a name was proposed but the filename disagrees | `y` or `n` |
 | `3 - check the rest.ods` | everything else, least confident first | anything |
+| `4 - confirm the youtube link.ods` | a video was found but not confidently enough to write it | a URL, or `n` |
+
+Sheet 4 answers go in its own **`link`** column, not `hint`: a bare `y` in the
+hint column means the artist and title are right, which is a different
+question. Those answers are kept in a `link` column in `hints.tsv`, alongside
+the hints, and survive the sheets being rebuilt.
 
 **Your answers are kept in `hints.tsv`, not in the sheets.** Delete a sheet
 whenever you like; the answers in it are already remembered, and an answer
@@ -447,6 +454,36 @@ oga, aac and flac -- not webm -- and Essentia cannot decode it either, so the
 files would be both unplayable and unmeasurable. The Opus stream is ~136k
 against AAC's ~130k; six kilobits is not worth a file that will not open on the
 device this exists for.
+
+**The YouTube link goes in the comment, but only when it is provenance.**
+Namida links a local track to its video by reading a URL out of the comment
+tag, which is why the 124 m4a files downloaded through it already worked -- the
+comment survived because `write_tags` copies the file before tagging. So the
+comment is where the link belongs, with one restriction: it is written only
+when the link says where this audio *came from* (the file's own comment, a link
+you typed, a redownload we kept). A link merely found by searching is a video
+*of* the song, not the source of these bytes, so it goes to `TXXX:YOUTUBE_ID`
+where a player will not act on it. `YOUTUBE_TRUST` says which kind it is.
+
+ffmpeg is the reason MP3s had none of this. yt-dlp maps the video URL onto both
+`purl` and `comment`, but ffmpeg writes `comment` into a `TXXX:comment` frame
+on MP3 rather than a real `COMM`, and drops `purl` from m4a entirely -- so the
+convention works on m4a and silently fails on MP3. Writing `COMM` directly with
+mutagen is what fixes it.
+
+**A link is never rejected for being the wrong length.** `redownload.py` vetoes
+a candidate whose duration drifts more than 8 seconds, because there it stops
+"improve quality" from becoming "change the song". Reused as a link filter that
+same rule throws away 35 of the 171 links in `hints.tsv` -- a fifth of the
+answers given by hand -- because these files are YouTube rips whose intros the
+streaming single does not have. Origin evidence is therefore never
+duration-checked; only a lone search result is, and with a 30-second window.
+
+**Odesli was measured and dropped.** It looked like the obvious way to turn an
+ISRC into a YouTube link. It answers by platform id (a bare ISRC is a 400), and
+five lookups -- including mainstream tracks whose videos certainly exist --
+returned no YouTube entity at all. MusicBrainz `url-rels` is the source that
+does work: on a 24-recording sample, 3 carried a `free streaming` YouTube link.
 
 **Cover art is square, 600x600 JPEG.** Players crop or stretch anything else.
 YouTube thumbnails are 16:9, so they are centre-cropped, and anything under

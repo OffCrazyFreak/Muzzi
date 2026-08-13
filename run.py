@@ -151,7 +151,11 @@ def main():
         ("serial", [stage("artist_names", "--apply"),
                     stage("origin", "--apply"),
                     stage("lastfm_tags"),
-                    stage("dedupe_names", "--apply")]),
+                    stage("dedupe_names", "--apply"),
+                    # After dedupe_names on purpose: a link found on the copy
+                    # that lost is inherited by the one that ships, so this has
+                    # to know which copy that is.
+                    stage("yt_links", "--apply")]),
 
         # The only stage that writes audio, and it writes copies.
         # --prune because out/_all is a rebuild, not an accumulation: without

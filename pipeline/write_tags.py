@@ -31,9 +31,9 @@ import unicodedata
 
 import mutagen
 
-from mutagen.id3 import (APIC, TALB, TBPM, TCON, TDRC, TIT2, TKEY,
+from mutagen.id3 import (APIC, COMM, TALB, TBPM, TCON, TDRC, TIT2, TKEY,
                          TLAN, TPE1, TPE2, TPE4, TPOS, TPUB, TRCK, TSRC, TXXX,
-                         UFID, USLT)
+                         UFID, USLT, WOAS)
 
 from mutagen.mp3 import MP3
 
@@ -61,6 +61,7 @@ CANON = os.path.join(HERE, "cache", "artist_canon.json")
 ART_INDEX = os.path.join(HERE, "cache", "art_index.json")
 SILENCE = os.path.join(HERE, "cache", "silence.json")
 ALIGN = os.path.join(HERE, "cache", "lyric_align.json")
+YT_LINKS = os.path.join(HERE, "cache", "youtube_links.json")
 
 # Re-timing a lyric sheet by less than this is not worth the write: it is
 # inside the error of the measurement that produced it.
@@ -469,6 +470,45 @@ def compose_title(title, feats, bpm=None):
     return out
 
 
+_URL = re.compile(r"https?://\S+")
+_YT_IN_TEXT = re.compile(r"youtu\.be/|youtube\.com/")
+
+
+def existing_comment(path):
+    """-> the comment already on the file, for either container, or ""."""
+    try:
+        f = mutagen.File(path)
+        t = f.tags if f else None
+        if t is None:
+            return ""
+        if hasattr(t, "getall"):
+            fr = t.getall("COMM")
+            return str(fr[0].text[0]) if fr and fr[0].text else ""
+        v = t.get("\xa9cmt") or t.get("comment")
+        return str(v[0]) if v else ""
+    except Exception:
+        return ""
+
+
+def previous_youtube(path):
+    """-> (trust, prior_comment) this build's predecessor wrote, for m4a/FLAC."""
+    try:
+        f = mutagen.File(path)
+        t = f.tags if f else None
+        if t is None or hasattr(t, "getall"):
+            return None, None
+
+        def free(name):
+            v = t.get(f"----:com.apple.iTunes:{name}") or t.get(name.lower())
+            if not v:
+                return None
+            v = v[0]
+            return v.decode("utf-8", "ignore") if isinstance(v, bytes) else str(v)
+        return free("YOUTUBE_TRUST"), free("PRIOR_COMMENT")
+    except Exception:
+        return None, None
+
+
 def digest(fields):
     """Short digest of the identity we wrote, for tamper/mismatch detection."""
     blob = "|".join(str(fields.get(k) or "") for k in
@@ -494,9 +534,13 @@ def write_generic(dst, fields, art_path, lyrics):
         # writing ours. The loop below only overwrites the names it produces.
         for k in [k for k in f.keys() if _is_rg_tag(k)]:
             f.pop(k, None)
+        # "comment" must map to the native atom. Left to the freeform loop
+        # below it becomes ----:com.apple.iTunes:COMMENT, which is not the
+        # field any player reads -- and reading a URL out of the comment is how
+        # Namida links a local track to its video.
         m = {"title": "\xa9nam", "artist": "\xa9ART", "albumartist": "aART",
              "album": "\xa9alb", "date": "\xa9day", "genre": "\xa9gen",
-             "bpm": "tmpo"}
+             "bpm": "tmpo", "comment": "\xa9cmt"}
         for k, v in fields.items():
             if k not in m:
                 continue
@@ -508,6 +552,12 @@ def write_generic(dst, fields, art_path, lyrics):
                 f.pop(m[k], None)
                 continue
             f[m[k]] = [int(v)] if k == "bpm" else [str(v)]
+        # Earlier builds had no "comment" in the map, so the freeform loop
+        # below wrote ----:com.apple.iTunes:COMMENT. That loop now skips
+        # "comment", and it only pops an atom whose key is in `fields`, so the
+        # stale one would survive every later build and the file would carry
+        # two comment fields free to disagree.
+        f.pop("----:com.apple.iTunes:COMMENT", None)
         for k, v in fields.items():
             if k in m:
                 continue
@@ -593,7 +643,8 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
             primary = chosen
         peak = audio.get("true_peak")
         gain = rg_gain(audio.get("loudness_lufs"), peak)
-        write_generic(dst, {
+        yt = extra.get("youtube") or {}
+        generic = {
             "title": (ident or {}).get("display_title"),
             "artist": "; ".join(ident["all_artists"]) if ident else None,
             "albumartist": (ident or {}).get("lead_artist"),
@@ -642,7 +693,28 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
             # marker at all can be told from one deliberately left whole.
             "muzzi_trim": f"{trimmed:.3f}",
             "muzzi_lrc_shift": (f"{lrc_shift:.2f}" if lrc_shift else None),
-        }, extra.get("art_path"), lyrics)
+            "youtube_id": yt.get("video_id"),
+            "youtube_trust": yt.get("trust"),
+            "youtube_from": yt.get("from"),
+        }
+        # The comment only when the link says where this audio came from. A
+        # reference link is a video OF the song, not the source of these bytes,
+        # and the comment field is the one a player acts on -- Namida links a
+        # local track to whatever URL it finds there. The key is omitted rather
+        # than set empty, because write_generic deletes a mapped atom whose
+        # value is empty and that would wipe comments it was never asked about.
+        prev_trust, prior_saved = previous_youtube(dst)
+        if yt.get("trust") == "origin":
+            prior = existing_comment(dst)
+            if prior and not _YT_IN_TEXT.search(prior) and _URL.search(prior):
+                generic["prior_comment"] = prior
+            generic["comment"] = yt["url"]
+        elif prev_trust == "origin":
+            # Ours to remove, and only ours: see the ID3 path for why a comment
+            # that arrived on the source file is never touched.
+            generic["comment"] = prior_saved or ""
+            generic["prior_comment"] = ""
+        write_generic(dst, generic, extra.get("art_path"), lyrics)
         return trimmed
 
     mp3 = MP3(dst)
@@ -834,6 +906,51 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
         # line. Plain text there is what produced a flat, unscrolling list.
         t.delall("USLT")
         t.add(USLT(encoding=3, lang="und", desc="", text=lyrics))
+
+    # ---- where this audio came from ----
+    # What the previous build claimed, read before it is cleared. A comment is
+    # only ours to remove if we are the ones who wrote it: a URL that came in
+    # on the source file is that file's own provenance and must survive
+    # untouched, including when this stage has no opinion at all.
+    was = t.getall("TXXX:YOUTUBE_TRUST")
+    prev_trust = str(was[0].text[0]) if was and was[0].text else None
+    # Cleared first, because txxx() no-ops on an empty value: a link we no
+    # longer stand behind would otherwise survive every later build, the same
+    # way a withdrawn genre outlived the rule that stopped producing it.
+    for frame in ("YOUTUBE_ID", "YOUTUBE_TRUST", "YOUTUBE_FROM"):
+        t.delall(f"TXXX:{frame}")
+    yt = extra.get("youtube") or {}
+    if yt.get("video_id"):
+        txxx("YOUTUBE_ID", yt["video_id"])
+        txxx("YOUTUBE_TRUST", yt.get("trust"))
+        txxx("YOUTUBE_FROM", yt.get("from"))
+    # Only origin evidence earns the comment field. Namida treats any URL it
+    # finds there as this track's video, so a search result -- which is a video
+    # OF the song rather than the source of these bytes -- must not go in it.
+    if yt.get("trust") == "origin":
+        prior = " ".join(str(c.text[0]) for c in t.getall("COMM")
+                         if getattr(c, "text", None))
+        # A comment that holds some other link is somebody's provenance note
+        # (two files here point at SoundCloud). Keep it rather than overwrite
+        # it; the 145 others say things like "converted by convert2mp3.net".
+        if prior and not _YT_IN_TEXT.search(prior) and _URL.search(prior):
+            txxx("PRIOR_COMMENT", prior)
+        t.delall("COMM")
+        t.add(COMM(encoding=3, lang="eng", desc="", text=[yt["url"]]))
+        # The standards-correct home for the same fact. Nothing reads it today,
+        # but it costs one frame and it is what WOAS is for.
+        t.delall("WOAS")
+        t.add(WOAS(url=yt["url"]))
+    elif prev_trust == "origin":
+        # An earlier build wrote that comment and this one no longer stands
+        # behind it. Take it back out, and put back whatever it displaced.
+        restore = t.getall("TXXX:PRIOR_COMMENT")
+        t.delall("COMM")
+        t.delall("WOAS")
+        t.delall("TXXX:PRIOR_COMMENT")
+        if restore and restore[0].text:
+            t.add(COMM(encoding=3, lang="eng", desc="",
+                       text=[str(restore[0].text[0])]))
 
     # ---- provenance ----
     fields = {**(ident or {}), "bpm": audio.get("bpm"), "key": audio.get("camelot")}
@@ -1032,6 +1149,7 @@ def main():
     art_index = json.load(open(ART_INDEX)) if os.path.exists(ART_INDEX) else {}
     sil = json.load(open(SILENCE)) if os.path.exists(SILENCE) else {}
     align = json.load(open(ALIGN)) if os.path.exists(ALIGN) else {}
+    yt_links = json.load(open(YT_LINKS)) if os.path.exists(YT_LINKS) else {}
 
     # Album loudness, energy-weighted by duration -- see album_loudness().
     # Album peak is the loudest peak anywhere on the album, because one hot
@@ -1126,7 +1244,8 @@ def main():
         print(f"  --only: writing {len(rows)} tracks")
 
     stats = {"identified": 0, "audio_only": 0, "promoted_by_lyrics": 0,
-             "missing_audio": 0, "errors": 0, "with_art": 0, "with_genre": 0}
+             "missing_audio": 0, "errors": 0, "with_art": 0, "with_genre": 0,
+             "with_youtube": 0}
     intended, written_from = set(), set()
     for r in rows:
         src = r["path"]
@@ -1286,6 +1405,14 @@ def main():
             akey = f'{r.get("proposed_artist")}|{r["proposed_album"]}'.lower()
             extra["album_gain"] = album_gain.get(akey)
             extra["album_peak"] = album_peak.get(akey)
+        # Independent of identity, so it is attached whether or not the track
+        # is trusted: where the audio came from is knowable even when we cannot
+        # name the song, and an unidentified file is exactly the one a link
+        # helps most.
+        yt = yt_links.get(src)
+        if yt:
+            extra["youtube"] = yt
+            stats["with_youtube"] += 1
         if extra.get("art_path"):
             stats["with_art"] += 1
         if extra.get("genres"):
@@ -1343,6 +1470,7 @@ def main():
     print(f"    missing audio analysis            {stats['missing_audio']:4}")
     print(f"    with cover art                    {stats['with_art']:4}")
     print(f"    with genre                        {stats['with_genre']:4}")
+    print(f"    with a YouTube link               {stats['with_youtube']:4}")
     print(f"    synced .lrc sidecars              {stats.get('lrc_files', 0):4}")
     if stats.get("lrc_removed"):
         print(f"    stale .lrc removed                "

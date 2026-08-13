@@ -218,6 +218,13 @@ def main():
         if txxx("MUZZI_SOURCE") == "audio-only" and "Unknown" in groups:
             crates["Needs identification"].append(fn)
 
+        # Gated like every other crate in this loop: --crates is a contract,
+        # and a crate that ignores it is written when the caller asked for it
+        # not to be. "Unknown" because this is provenance, like the crate
+        # above it, rather than a musical property.
+        if txxx("YOUTUBE_ID") and "Unknown" in groups:
+            crates["Has YouTube link"].append(fn)
+
         try:
             d = float(txxx("DANCEABILITY") or 0)
             if d >= 1.2 and "Mood" in groups:

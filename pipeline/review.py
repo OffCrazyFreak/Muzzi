@@ -77,9 +77,14 @@ def _load(path):
     return json.load(open(path)) if os.path.exists(path) else {}
 
 
-def _hints_from_ods(path):
+def _hints_from_ods(path, column="hint"):
     """Read an edited LibreOffice spreadsheet directly, so there is no export
-    step to get wrong."""
+    step to get wrong.
+
+    column names which answer to take. yt_links.py asks about links in a
+    column of its own, because a bare "y" in a hint column means the artist
+    and title are right, which is not what its sheet asked.
+    """
     try:
         from odf.opendocument import load
         from odf.table import Table, TableRow, TableCell
@@ -106,8 +111,8 @@ def _hints_from_ods(path):
                 rows.append(cells)
         if not header or "file" not in header:
             continue
-        fi, hi = header.index("file"), (header.index("hint")
-                                        if "hint" in header else None)
+        fi, hi = header.index("file"), (header.index(column)
+                                        if column in header else None)
         for r in rows:
             if hi is None or len(r) <= max(fi, hi):
                 continue
@@ -235,15 +240,49 @@ def adopt_orphan_hints(hints, present):
     return moved
 
 
-def save_hints(hints):
+def load_links():
+    """-> {filename: link}, the 'link' column of hints.tsv.
+
+    A column of its own, because the answers mean different things: "y" in the
+    hint column confirms an artist and title, and yt_links.py is asking which
+    video a file came from.
+    """
+    out = {}
+    if not os.path.exists(HINTS):
+        return out
+    with open(HINTS, encoding="utf-8-sig", newline="") as fh:
+        head = fh.readline()
+        if not head:
+            return out
+        fh.seek(0)
+        for row in csv.DictReader(fh, delimiter=max(("\t", ",", ";"),
+                                                    key=head.count)):
+            name = (row.get("file") or "").strip()
+            link = (row.get("link") or "").strip()
+            if name and link:
+                out[name] = link
+    return out
+
+
+def save_hints(hints, links=None):
     """The durable record of everything you have answered.
 
     Until now an answer existed only inside whichever spreadsheet you typed it
     into, so regenerating the sheets would have thrown away every y, n and link
     -- 1551 of them. The sheets are a view; this file is the memory.
+
+    The link column is read back and re-emitted even when this stage knows
+    nothing about it: review.py rewrites the whole file, so a column it does
+    not carry is a column it deletes.
     """
+    links = load_links() if links is None else links
     with open(HINTS, "w", encoding="utf-8", newline="") as fh:
         w = csv.writer(fh, delimiter="\t")
+        if links:
+            w.writerow(["file", "hint", "link"])
+            for name in sorted(set(hints) | set(links)):
+                w.writerow([name, hints.get(name, ""), links.get(name, "")])
+            return
         w.writerow(["file", "hint"])
         for name in sorted(hints):
             w.writerow([name, hints[name]])
@@ -419,19 +458,26 @@ def _rows_from(queue_path, rows):
     return out
 
 
-def _ods(path, title, note, items, with_proposal=True):
-    """Write one spreadsheet. Falls back to .tsv if odfpy is missing."""
-    cols = ["rank", "confidence", "tier", "file", "proposed_artist",
-            "proposed_title", "proposed_album", "proposed_year", "why",
-            "audio_flags", "hint"]
+def _ods(path, title, note, items, with_proposal=True, cols=None, cells=None):
+    """Write one spreadsheet. Falls back to .tsv if odfpy is missing.
 
-    def cells(r, i):
-        return [i, r["confidence"], r["tier"], r["file"],
-                (r["proposed_artist"] or "") if with_proposal else "",
-                (r["proposed_title"] or "") if with_proposal else "",
-                (r["proposed_album"] or "") if with_proposal else "",
-                (r["proposed_year"] or "") if with_proposal else "",
-                "; ".join(r["reasons"]), "; ".join(r["flags"]), r["hint"]]
+    cols/cells override the identity-queue layout, so another stage can publish
+    a sheet of its own without a second copy of this writer. yt_links.py uses
+    that to ask about links.
+    """
+    if cols is None:
+        cols = ["rank", "confidence", "tier", "file", "proposed_artist",
+                "proposed_title", "proposed_album", "proposed_year", "why",
+                "audio_flags", "hint"]
+
+    if cells is None:
+        def cells(r, i):
+            return [i, r["confidence"], r["tier"], r["file"],
+                    (r["proposed_artist"] or "") if with_proposal else "",
+                    (r["proposed_title"] or "") if with_proposal else "",
+                    (r["proposed_album"] or "") if with_proposal else "",
+                    (r["proposed_year"] or "") if with_proposal else "",
+                    "; ".join(r["reasons"]), "; ".join(r["flags"]), r["hint"]]
     try:
         from odf.opendocument import OpenDocumentSpreadsheet
         from odf.table import Table, TableRow, TableCell
@@ -469,9 +515,35 @@ def _ods(path, title, note, items, with_proposal=True):
     doc.save(path)
 
 
+def links_from_sheets():
+    """-> {filename: link} typed into the review sheets since the last run.
+
+    hints.tsv is the memory; the sheets are a view. A link answer only exists
+    in the sheet until something copies it across, and this stage deletes every
+    sheet a few lines below. review runs five times before yt_links does, so
+    without this the answer is wiped in the same run it was given, and the user
+    sees a question they already answered come back.
+
+    Read from the "link" column specifically: sheet 4 asks for a URL, and a
+    bare "y" in a hint column means the artist and title are right, which is a
+    different question.
+    """
+    out = {}
+    if not os.path.isdir(REVIEW_DIR):
+        return out
+    for n in sorted(os.listdir(REVIEW_DIR)):
+        if n.lower().endswith(".ods"):
+            out.update(_hints_from_ods(os.path.join(REVIEW_DIR, n),
+                                       column="link"))
+    return {k: v for k, v in out.items() if v}
+
+
 def publish_sheets(groups, hints):
     """Rebuild the review folder from scratch, numbered in working order."""
-    save_hints(hints)
+    # Before the wipe, or the answer goes with the sheet.
+    links = load_links()
+    links.update(links_from_sheets())
+    save_hints(hints, links=links)
     os.makedirs(REVIEW_DIR, exist_ok=True)
     # Wipe first. A sheet that is not regenerated is a sheet with nothing left
     # to answer, and leaving it on disk is what made it impossible to tell
@@ -939,6 +1011,12 @@ def main():
             "proposed_title": m.get("title"),
             "proposed_album": rel.get("album"),
             "proposed_year": rel.get("year"),
+            # Where the identity came from. write_tags stamps it as
+            # MUZZI_SOURCE; without it here that stamp fell back to the
+            # literal "acoustid" on every file, which made the value a lie and
+            # left the "Needs identification" playlist permanently empty
+            # because nothing could ever be "audio-only".
+            "source": m.get("source"),
             "recording_id": m.get("recording_id"),
             "release_group_id": rel.get("release_group_id"),
             "bpm": a.get("bpm"),
