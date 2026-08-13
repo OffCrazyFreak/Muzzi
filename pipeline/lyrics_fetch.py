@@ -112,8 +112,12 @@ _ARTIST_SPLIT = re.compile(r"\s*(?:;|,|&|\bfeat\.?\b|\bft\.?\b|\bx\b|\bvs\.?\b)\
 # typos, they are the standard transliterations: "Kawasaki" is spelled
 # "Kavasaki", "Michael" as "Majkl". LRCLIB holds whichever spelling the
 # uploader used, so an exact title search misses the song entirely.
-_TRANSLIT = [("w", "v"), ("y", "j"), ("x", "ks"), ("qu", "kv"), ("ck", "k"),
-             ("ph", "f"), ("th", "t")]
+#
+# Imported rather than defined here, because fit() has to fold the same
+# letters this asks for. Two copies is how the questions and the comparison
+# that judges the answers came apart: the query found "Kavasaki" and fit()
+# then scored it 0.000 against "Kawasaki".
+from pipeline.webmatch import _TRANSLIT  # noqa: E402
 
 
 def deaccent(s):
