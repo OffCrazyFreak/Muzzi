@@ -74,6 +74,43 @@ _GROUP = re.compile(r"[\(\[]([^()\[\]]*)[\)\]]")
 _IN_GROUP_SEP = re.compile(r"[\s/,;:|.–—_+-]+")
 
 
+# An uploader's release-channel slogan, tacked on after a pipe. NCS names its
+# uploads "Title | Genre | NCS - Copyright Free Music", and only the title is
+# the title. Recognised by the slogan itself, never by the pipe alone: a pipe
+# is legal in a name and the genre segment beside it is not evidence of
+# anything on its own.
+#
+# Every phrase here says something about licensing, which is what makes it a
+# channel slogan rather than words. A bare "Free Music" is deliberately not
+# one of them: it is ordinary enough to be part of a name, and a slogan that
+# means it always carries "copyright", "royalty" or the channel's own name.
+# The whole segment has to be the slogan, optionally after a short channel
+# name and a dash, so a title segment that merely contains the words survives.
+_SLOGAN = re.compile(
+    r"^\s*(?:[^|]{1,24}?\s*[-–—]\s*)?"
+    r"(?:copyright[\s-]*free|no[\s-]*copyright|ncs[\s-]*release"
+    r"|royalty[\s-]*free|free[\s-]*download)"
+    r"(?:\s*(?:music|download|release))?\s*$", re.I)
+
+
+def _drop_slogan_tail(title):
+    """-> the title with a pipe-separated uploader slogan removed.
+
+    Everything from the FIRST pipe is dropped, but only when a whole segment
+    after it is a slogan. "Titsepoken 2015 | Electro | NCS - Copyright Free
+    Music" keeps "Titsepoken 2015", including the year, which is part of that
+    track's real name. The genre segment goes with the slogan on purpose:
+    "Title | Genre | Slogan" is one uploader's naming scheme, and the genre
+    is no more part of the title than the slogan is.
+    """
+    parts = title.split("|")
+    if len(parts) < 2:
+        return title
+    if any(_SLOGAN.match(p) for p in parts[1:]):
+        return parts[0]
+    return title
+
+
 def _drop_cruft_groups(title):
     """-> the title with every wholly-decorative bracketed group removed.
 
@@ -246,13 +283,27 @@ def clean_title(t):
     # Whole decorative groups first. Left to the per-token rule below, the
     # words inside "(lyrics/tekst)" vanish one at a time and the separator
     # between them survives.
-    out = _drop_cruft_groups(t)
-    out = _CRUFT.sub(" ", out)
-    out = _TAIL.sub("", out)
+    grouped = _drop_cruft_groups(t)
+    out = _drop_slogan_tail(grouped)
+    after_cruft = _CRUFT.sub(" ", out)
+    # Did this title actually carry decoration? Recorded before the tidying
+    # rules below run, because those change almost every title and would make
+    # the test meaningless.
+    cruft_removed = (grouped != t) or (after_cruft != out)
+    out = _TAIL.sub("", after_cruft)
     # A release year tacked onto the title. Uploaders write "Drugu neću -
     # 2010", and it is enough to stop the song matching the same song without
     # it, which puts two copies in the library.
     out = re.sub(r"\s*[-–—(\[]\s*(?:19|20)\d{2}\s*[)\]]?\s*$", "", out)
+    # A bare trailing year, but ONLY when cleaning this title just removed
+    # decoration. "GASTTOZZ - ARITMIJE (OFFICIAL VIDEO) 2018" is an upload
+    # year sitting where the group used to be; "Sarvagon 2015" and "Magla Bend
+    # - Samo se nocas pojavi 2018" carry no cruft at all, and NCS really does
+    # call that track "Sarvagon 2015". Without evidence that the year is
+    # decoration, it stays: a wrong title is worse than an untidy one, and
+    # deciding otherwise needs a catalogue lookup this stage does not do.
+    if cruft_removed:
+        out = re.sub(r"\s+(?:19|20)\d{2}\s*$", "", out)
     # Uploaders quote the song name -- "Búscame" -- and the quotes then become
     # underscores in the filename, because a quote is not legal in one.
     out = out.strip().strip('"“”«»‘’')
