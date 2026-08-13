@@ -45,6 +45,7 @@ from pipeline import scenes  # noqa: E402
 from pipeline import bpm_overrides  # noqa: E402
 from pipeline import artist_names  # noqa: E402
 from pipeline import lrc  # noqa: E402
+from pipeline import subset  # noqa: E402
 from pipeline import lyric_align  # noqa: E402
 from pipeline import silence  # noqa: E402
 
@@ -1401,28 +1402,9 @@ def main():
     # any earlier and a subset build writes different tags to different paths
     # than the full build it is supposed to be compared against.
     if args.only:
-        wanted, unknown = set(), []
-        by_fp = {fp: v.get("path") for fp, v in
-                 json.load(open(ANALYSIS)).items() if v.get("path")}
         known = {r["path"] for r in json.load(open(REVIEW)) if r.get("path")}
-        with open(args.only, encoding="utf-8") as fh:
-            for line in fh:
-                # Leading # only: a song called "Song #1" is a real filename
-                # and stripping from anywhere would drop it from the subset
-                # without saying so.
-                if not line.strip() or line.lstrip().startswith("#"):
-                    continue
-                line = line.strip()
-                path = by_fp.get(line, line)
-                if path in known:
-                    wanted.add(path)
-                else:
-                    unknown.append(line)
-        if unknown:
-            print(f"  {len(unknown)} entries in {args.only} match no known "
-                  f"track:")
-            for u in unknown[:10]:
-                print(f"    {u}")
+        wanted, unknown = subset.read(args.only, known, ANALYSIS)
+        subset.report(args.only, unknown)
         # A subset that silently came out empty writes nothing, reports no
         # error, and reads exactly like a clean run.
         writable = {r["path"] for r in rows}

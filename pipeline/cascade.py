@@ -49,6 +49,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
 from pipeline import evidence  # noqa: E402
+from pipeline import subset  # noqa: E402
 from pipeline.identify import RateLimiter  # noqa: E402
 from pipeline.webmatch import fit, version_mismatch  # noqa: E402
 
@@ -677,17 +678,11 @@ def main():
     todo = [r for r in rows
             if args.force or _stale(on_disk.get(r["path"]), r)]
     if args.only:
-        with open(args.only, encoding="utf-8") as fh:
-            want = {ln.strip() for ln in fh if ln.strip()
-                    and not ln.startswith("#")}
         # Named rather than silently ignored: a --only list whose paths match
         # nothing looks exactly like a run with nothing left to do, and the
         # difference is a verification that measured an empty set.
-        missing = want - {r["path"] for r in rows}
-        if missing:
-            print(f"  {len(missing)} of {len(want)} paths are not in "
-                  f"review.json and will not be enriched, e.g. "
-                  f"{sorted(missing)[0]}")
+        want, unknown = subset.read(args.only, {r["path"] for r in rows})
+        subset.report(args.only, unknown)
         todo = [r for r in todo if r["path"] in want]
     if args.limit:
         todo = todo[: args.limit]

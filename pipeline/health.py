@@ -83,10 +83,34 @@ _state = {}
 
 PROBE_ARTIST, PROBE_TITLE = "Rick Astley", "Never Gonna Give You Up"
 
+# Deezer's lyrics are asked by id rather than by name, so its probe cannot use
+# the query above and needs actual rows. More than one, from different labels
+# and decades, so the probe is not a bet on a single catalogue entry surviving.
+#   3135556     Daft Punk, Harder Better Faster Stronger
+#   916424      Gotye, Somebody That I Used To Know
+#   1109731     Adele, Rolling in the Deep
+DEEZER_PROBE_TRACKS = ("3135556", "916424", "1109731")
+
 
 def _session():
     import requests
     return requests.Session()
+
+
+def as_object(response):
+    """-> the response's JSON when it is an object, else None.
+
+    Every probe below reads named fields out of the answer, and `.get` on a
+    bare list or a string raises rather than returning nothing. A service that
+    answers 200 with JSON of the wrong shape has changed under us, which is a
+    verdict this module already has a word for, so it is worth saying that
+    rather than letting an AttributeError decide what happens.
+    """
+    try:
+        got = response.json()
+    except Exception:
+        return None
+    return got if isinstance(got, dict) else None
 
 
 def _lrclib(s):
@@ -129,7 +153,10 @@ def _itunes(s):
         return evidence.RATE_LIMITED, "403, its usual throttle response"
     if r.status_code != 200:
         return DOWN, f"HTTP {r.status_code}"
-    if not (r.json().get("results") or []):
+    d = as_object(r)
+    if d is None:
+        return CHANGED, "answered with something that is not an object"
+    if not (d.get("results") or []):
         # iTunes answers a throttled request with 200 and zero results, which
         # is indistinguishable from a real miss on any one query. On this
         # query it is not: the track is certainly in the catalogue.
@@ -147,7 +174,10 @@ def _musicbrainz(s):
         return DOWN, "503, its 'currently busy' response"
     if r.status_code != 200:
         return DOWN, f"HTTP {r.status_code}"
-    if not (r.json().get("recordings") or []):
+    d = as_object(r)
+    if d is None:
+        return CHANGED, "answered with something that is not an object"
+    if not (d.get("recordings") or []):
         return CHANGED, "no hit for a recording it certainly has"
     return OK, "answered"
 
@@ -177,10 +207,78 @@ def _ytmusic(_s):
     return OK, "answered"
 
 
+def _deezer_lyrics(s):
+    """Deezer's lyrics, which are a different question from Deezer's search.
+
+    Probed separately because it fails separately: the public search API needs
+    no credentials, while lyrics need an ARL cookie exchanged for a
+    short-lived token. An expired ARL leaves search working perfectly and
+    every lyric lookup returning nothing, which without this reads as "Deezer
+    has no lyrics for your music".
+
+    Asked by exact track id, so this checks the two things that can break: the
+    token exchange, and whether an id we name comes back with its own lyrics.
+    """
+    arl = secret("deezer_arl")
+    if not arl:
+        return NO_KEY, "no deezer_arl in config/secrets.json"
+    try:
+        r = s.post("https://auth.deezer.com/login/arl",
+                   params={"jo": "p", "rto": "c", "i": "c"},
+                   cookies={"arl": arl}, timeout=20)
+        if r.status_code != 200:
+            return DOWN, f"auth returned HTTP {r.status_code}"
+        jwt = (as_object(r) or {}).get("jwt")
+    except Exception as e:
+        return DOWN, f"auth {type(e).__name__}: {str(e)[:40]}"
+    if not jwt:
+        # The ARL is the only credential, so no token means it is no longer
+        # valid. That is a key problem, not an outage, and it needs a person.
+        return BAD_KEY, "the ARL was not accepted; log in again and replace it"
+
+    # Asked by id, so a search cannot be what fails. More than one id, because
+    # a single one makes this probe a bet on one catalogue row: if that track
+    # were ever withdrawn or lost its lyrics, the probe would report the whole
+    # endpoint broken and the source would be disabled for good. The second is
+    # only asked when the first disappoints, so the usual cost is one request.
+    query = ("query P($id: String!) { track(trackId: $id) "
+             "{ title lyrics { text } } }")
+    last = "no track answered"
+    for tid in DEEZER_PROBE_TRACKS:
+        try:
+            r = s.post("https://pipe.deezer.com/api",
+                       headers={"Authorization": f"Bearer {jwt}"},
+                       json={"operationName": "P", "variables": {"id": tid},
+                             "query": query}, timeout=20)
+            if r.status_code != 200:
+                return DOWN, f"pipe returned HTTP {r.status_code}"
+            d = as_object(r)
+        except Exception as e:
+            return DOWN, f"pipe {type(e).__name__}: {str(e)[:40]}"
+        if d is None:
+            return CHANGED, "the pipe answered with something that is not an "\
+                            "object"
+        if d.get("errors"):
+            # A GraphQL error on a fixed query means the schema moved under
+            # us, which is the standing hazard of an unofficial endpoint. It
+            # is about the query, not the track, so there is no point trying
+            # another one.
+            return CHANGED, str(d["errors"])[:70]
+        track = ((d.get("data") or {}).get("track") or {})
+        if ((track.get("lyrics") or {}).get("text") or "").strip():
+            return OK, f"answered for {track.get('title')!r}"
+        last = f"no lyrics for track {tid}"
+    return CHANGED, (f"{last}, and none of {len(DEEZER_PROBE_TRACKS)} "
+                     f"probe tracks had any")
+
+
 def _genius(s):
-    token = _genius_token()
+    # The same key name lyrics_fetch._genius_token reads. Spelled once, here,
+    # because two spellings of one secret is a source that silently stops
+    # being asked.
+    token = secret("genius_access_token")
     if not token:
-        return NO_KEY, "no token in config/secrets.json"
+        return NO_KEY, "no genius_access_token in config/secrets.json"
     r = s.get("https://api.genius.com/search",
               params={"q": f"{PROBE_ARTIST} {PROBE_TITLE}"},
               headers={"Authorization": f"Bearer {token}", **UA}, timeout=20)
@@ -188,29 +286,42 @@ def _genius(s):
         return BAD_KEY, f"HTTP {r.status_code}, the token was rejected"
     if r.status_code != 200:
         return DOWN, f"HTTP {r.status_code}"
-    if not ((r.json().get("response") or {}).get("hits") or []):
+    d = as_object(r)
+    if d is None:
+        return CHANGED, "answered with something that is not an object"
+    if not ((d.get("response") or {}).get("hits") or []):
         return CHANGED, "no hit for a song it certainly has"
     return OK, "answered"
 
 
-def _genius_token():
+def secret(name):
+    """-> one value out of config/secrets.json, or None.
+
+    Read through the same key names the pipeline itself uses. A probe that
+    looks up a different spelling reports "not configured" for a source that is
+    configured, which is a lie in the one direction this module exists to
+    prevent: the source is then never asked, and its silence looks like an
+    absence rather than a misreading of a file.
+    """
     p = os.path.join(HERE, "config", "secrets.json")
     if not os.path.exists(p):
         return None
     try:
         with open(p, encoding="utf-8") as fh:
-            d = json.load(fh)
+            values = json.load(fh)
     except (OSError, ValueError):
         return None
-    for k in ("genius", "genius_token", "GENIUS_TOKEN"):
-        if d.get(k):
-            return d[k]
-    return None
+    # A secrets file holding valid JSON that is not an object parses fine and
+    # then raises on .get, which would escape this module: _deezer_jwt calls
+    # this outside a try, so a stray `[]` in the file would crash a lyric
+    # sweep rather than reading as "no key".
+    return values.get(name) or None if isinstance(values, dict) else None
 
 
 PROBES = {
     "lrclib": _lrclib,
     "deezer": _deezer,
+    "deezer_lyrics": _deezer_lyrics,
     "itunes": _itunes,
     "musicbrainz": _musicbrainz,
     "coverartarchive": _coverartarchive,

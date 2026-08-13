@@ -270,11 +270,16 @@ def main():
     t0 = time.time()
     need, texts = [], {}
 
+    # The Deezer track id makes the lyric lookup exact rather than a search.
+    # Read once for the whole sweep, not per track.
+    dz = lyrics_fetch.deezer_ids()
+
     def fetch(r):
         ly = lyrics_fetch.fetch(r["proposed_artist"], r["proposed_title"],
                                 lyric_cache, session,
                                 album=r.get("proposed_album"),
-                                duration=durations.get(r["path"]))
+                                duration=durations.get(r["path"]),
+                                deezer_id=dz.get(r["path"]))
         return r, (ly.get("plain") or _strip_lrc(ly.get("synced")))
 
     with ThreadPoolExecutor(max_workers=8) as ex:
