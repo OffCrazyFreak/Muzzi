@@ -21,6 +21,9 @@ config/bpm_overrides.json
 audit/
 
 # ------------------------------------------------------- generated + bulky
+# your music, or symlinks to it. Either way it names real folders.
+input/*
+!input/.gitkeep
 # every API response, fingerprints, analysis, logs
 cache/
 # the tagged library and its playlists

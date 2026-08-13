@@ -657,7 +657,8 @@ def main():
 
     todo = []
     for root in args.root:
-     for dirpath, _, names in os.walk(root):
+     # followlinks, same reason as fingerprint: input/ holds symlinks.
+     for dirpath, _, names in os.walk(root, followlinks=True):
         for n in sorted(names):
             if not n.lower().endswith((".mp3", ".m4a", ".flac", ".opus", ".ogg", ".wav")):
                 continue

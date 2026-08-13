@@ -150,7 +150,8 @@ def build(roots, cache_path=None):
     seeds = {}
     exts = (".mp3", ".m4a", ".flac", ".ogg", ".opus", ".wav")
     for root in roots:
-        for dp, _, names in os.walk(root):
+        # followlinks, same reason as fingerprint: input/ holds symlinks.
+        for dp, _, names in os.walk(root, followlinks=True):
             for n in sorted(names):
                 if not n.lower().endswith(exts):
                     continue

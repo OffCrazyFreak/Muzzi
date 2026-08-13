@@ -20,6 +20,17 @@ Licensed [AGPL-3.0](LICENSE).
 
 ---
 
+## What it takes
+
+```
+input/             put your music folders here, or symlink them:
+                       ln -s "/media/you/Data/Music/Mine" input/Mine
+                   run.py with no arguments reads everything in here.
+                   Sources stay read-only, exactly as when named on the
+                   command line. Symlinks are resolved to their target, so
+                   caches record the real path and survive a rename.
+```
+
 ## What it produces
 
 ```
