@@ -25,7 +25,9 @@ Licensed [AGPL-3.0](LICENSE).
 ```
 out/_all/          one copy of every song, tagged, in the same subfolder
                    layout as your sources; a .lrc sidecar next to each
-out/playlists/     .m3u by genre, BPM band, decade, language, mood, quality
+out/playlists/     .m3u by BPM band, decade, language, mood, quality, and
+                   the hand-curated scenes; 15 tracks minimum, except
+                   Language, which is kept whatever its size
 review/            numbered spreadsheets, only what needs your eyes
 hints.tsv          every answer you have ever given, kept permanently
 ```
@@ -242,7 +244,7 @@ can't be wrong about which file it's describing:
 | `enrich_release` | years, from album + artist |
 | `fetch_art` | downloads artwork, once per album |
 | `lyrics_fetch` | LRCLIB, preferring synced lyrics, choosing by duration match |
-| `genres` | collapses multi-source genre soup into one canonical genre |
+| `genres` | collapses multi-source genre soup into one canonical genre, and holds the whitelist that is the only vocabulary allowed to reach a file |
 | `origin` | which country each artist is from, from Last.fm tags cross-checked against ISRC |
 | `lastfm_tags` | community tags for every artist and track. Cached, so the ~20 minutes it takes happens once |
 | `scenes` | picks the ONE genre each track gets, most specific evidence first |
@@ -500,6 +502,23 @@ produced genres called "5 Stars", "Brcko", "Gazda Paja" and "Glee". Nationality
 is filtered out entirely -- "German" is not a genre, and "Serbian" says nothing
 the Language crate does not.
 
+**The vocabulary is a whitelist, and it is the last word.** Those bars still
+let free text through, because the bottom two sources wrote whatever the API
+answered: the Deezer genre and the shared-tag fallback between them produced
+71 distinct genre strings, including "ballad", "club", "Rnb", "contemporary
+r&b", "Dance" next to "dance" and "Pop" next to "pop". A blocklist has to
+guess what an API will say next, which is why the old one had to name "Glee"
+and "Gazda Paja" individually. `genres.GENRES` names the ~24 strings allowed
+to reach a file instead, `genres._MERGE` folds the synonyms into them, and
+`genres.allow()` is the single gate every source passes through. Anything it
+cannot place produces no genre. The same list collapses five rap names into
+Hip-Hop and drops the ampersand from genre names, because players split a
+genre string on `&` and `/` and turned "R&B / Soul" into a genre called "R".
+
+Scene names from `config/scenes.json` are deliberately *not* gated. That file
+is hand-written, so it is already a whitelist, and gating it would mean a
+scene you add there vanishes unless you remember to add it in a second place.
+
 **Some scenes exist only as a list.** "Croatian Trap" and "Croatian Trash" are
 things people book festivals around and record blogs catalogue, and nowhere in
 any database. `config/scenes.json` holds them by hand. An artist can be in two:
@@ -587,6 +606,16 @@ longer displace a real answer, in either direction.
 **Playlists are rebuilt, not added to.** Same reasoning as the output folder: a
 crate that stops existing leaves behind a stale `.m3u` that still lists real
 files and looks entirely valid on the phone.
+
+**A playlist needs 15 tracks, and has to be something the player cannot do
+itself.** Genre playlists were built from the same `TCON` the player groups
+by, so they could only ever repeat its own genre menu; only the hand-curated
+scenes are worth a list, because nothing but `config/scenes.json` knows them.
+The 15-track floor removes the rest of the noise, and `export` prints what it
+pruned rather than pruning quietly, because a silent cap reads as "everything
+is here". `Language` is exempt: Montenegrin and Macedonian are real
+distinctions that happen to be small, and `Language - Other` is the catch-all
+the tail already folds into.
 
 **Analysis is keyed by fingerprint AND path.** Two files can share a
 fingerprint and still both need measuring -- the same song downloaded into two

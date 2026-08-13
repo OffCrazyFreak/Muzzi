@@ -528,8 +528,15 @@ def write_generic(dst, fields, art_path, lyrics):
     else:
         # FLAC / OGG: Vorbis comments are free-form uppercase keys.
         for k, v in fields.items():
-            if v not in (None, ""):
-                f[k.upper()] = str(v)
+            key = k.upper()
+            if v in (None, ""):
+                # Remove rather than skip, for the same reason the MP4 branch
+                # above pops: this writes over the previous build, so a genre
+                # we no longer stand behind would otherwise outlive the rule
+                # that stopped producing it.
+                f.pop(key, None)
+            else:
+                f[key] = str(v)
         if lyrics:
             f["LYRICS"] = lyrics
         if art_path and os.path.exists(art_path) and isinstance(f, FLAC):
@@ -579,7 +586,11 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
                 ident.get("lead_artist") or ident.get("artist"),
                 ident.get("title"), ident.get("year"),
                 extra.get("discogs_styles"), primary)
-            primary = chosen or primary
+            # Not "chosen or primary". The MP3 path clears the genre when the
+            # ranking declines to pick one, and falling back here instead left
+            # the same track tagged Pop as m4a and untagged as mp3. Both
+            # containers get one answer or none.
+            primary = chosen
         peak = audio.get("true_peak")
         gain = rg_gain(audio.get("loudness_lufs"), peak)
         write_generic(dst, {
