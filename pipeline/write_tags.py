@@ -44,6 +44,7 @@ from pipeline.genres import canonical as canonical_genre  # noqa: E402
 from pipeline import scenes  # noqa: E402
 from pipeline import bpm_overrides  # noqa: E402
 from pipeline import artist_names  # noqa: E402
+from pipeline import confidence  # noqa: E402
 from pipeline import lrc  # noqa: E402
 from pipeline import subset  # noqa: E402
 from pipeline import lyric_align  # noqa: E402
@@ -165,11 +166,16 @@ _LRC_STAMP = re.compile(r"\[\d+:\d+[.:]\d+\]")
 # language, it is noise that happens to be spelled in one.
 MIN_DISTINCT_WORDS = 20
 
-# Same lines the picker draws, imported rather than repeated so the write side
-# cannot start disagreeing with the side that chose the entry. They live beside
-# fit() in webmatch, which every consumer already imports: reading them from
-# lyrics_fetch meant loading the HTTP client to get two floats.
-from pipeline.webmatch import MIN_FIT, MAX_DURATION_DELTA  # noqa: E402
+# Comfortably above the bar. A score between the bar and this one passed, and
+# passed by little enough that it is worth counting: the difference between a
+# run where everything was obvious and a run that is one tuned threshold away
+# from writing the wrong words to a lot of files.
+MARGINAL = 0.8
+
+# The lines the picker draws are no longer read here at all. Both gates below
+# now ask pipeline/confidence.py for a score and compare it to that module's
+# bar, so the write side cannot start disagreeing with the side that chose the
+# entry, and the number a review sheet shows is the number the gate applied.
 
 
 def lyrics_trustworthy(entry, verified, artist, title=None):
@@ -199,32 +205,11 @@ def lyrics_trustworthy(entry, verified, artist, title=None):
     the artist and it disagrees". 139 entries here are that shape. Absence of
     evidence is not agreement, so they are untrusted unless the transcript
     speaks for them.
+    The score itself lives in confidence.lyric_text, so that the number a
+    review sheet shows and the boolean this gate applies can never disagree.
     """
-    if not entry or not isinstance(entry, dict):
-        return True, None
-    if verified and verified.get("instrumental"):
-        return False, "instrumental"
-    confirmed = bool(verified and verified.get("verdict") == "confirmed")
-    matched = entry.get("matched") or ""
-    if " - " not in matched:
-        if entry.get("synced") or entry.get("plain"):
-            return (True, None) if confirmed else (False, "unverifiable_match")
-        return True, None
-    from pipeline.webmatch import fit
-    ma, _, mt = matched.partition(" - ")
-    # Prefer the fits the picker already stamped; fall back to computing them
-    # so an entry written by an older selector is still judged.
-    af = entry.get("artist_fit")
-    tf = entry.get("title_fit")
-    if artist and af is None:
-        af = fit(artist, ma)
-    if title and tf is None:
-        tf = fit(title, mt)
-    if artist and af is not None and af < MIN_FIT:
-        return (True, None) if confirmed else (False, "wrong_artist")
-    if title and tf is not None and tf < MIN_FIT:
-        return (True, None) if confirmed else (False, "wrong_title")
-    return True, None
+    score, why = confidence.lyric_text(entry, verified, artist, title)
+    return score >= confidence.LYRIC_TEXT_BAR, why
 
 
 def lyrics_timing_ok(entry, decoded_secs, cut=0.0):
@@ -255,13 +240,13 @@ def lyrics_timing_ok(entry, decoded_secs, cut=0.0):
 
     `cut` is 0 on every untrimmed file, where both spellings are identical,
     which is why no aggregate check could see this.
+    The score lives in confidence.lyric_timing. A sheet that publishes no
+    duration scores None, meaning unknown, and still passes: not evidence of
+    wrong is not the same as evidence of right, and the two are worth telling
+    apart when reporting even though they act the same here.
     """
-    md = entry.get("matched_duration") if isinstance(entry, dict) else None
-    if not md or not decoded_secs:
-        return True, None            # nothing to compare: not evidence of wrong
-    if abs((decoded_secs - (cut or 0.0)) - md) > MAX_DURATION_DELTA:
-        return False, "duration_mismatch"
-    return True, None
+    score, why = confidence.lyric_timing(entry, decoded_secs, cut)
+    return score is None or score >= confidence.LYRIC_TIMING_BAR, why
 
 
 def resolve_language(verified, lyrics):
@@ -1555,6 +1540,26 @@ def main():
                     lyric_reason = why
                     stats["timing_rejected"] = stats.get("timing_rejected", 0) + 1
 
+            # Both halves as numbers, for the tracks that passed. A pass used
+            # to be a boolean, so a sheet matched at 0.55 and one matched at
+            # 1.00 were the same thing here, and a sheet timed 1.9s out was
+            # the same as one timed exactly. Counted so a run can say how much
+            # of what it wrote is comfortable and how much only just cleared.
+            if lyrics or synced:
+                t_score, _ = confidence.lyric_text(
+                    entry, v, ident.get("artist"), ident.get("title"))
+                if t_score < MARGINAL:
+                    stats["text_marginal"] = stats.get("text_marginal", 0) + 1
+                if synced:
+                    m_score, _ = confidence.lyric_timing(
+                        entry, a.get("decoded_secs"), cut)
+                    if m_score is None:
+                        stats["timing_unknown"] = (
+                            stats.get("timing_unknown", 0) + 1)
+                    elif m_score < MARGINAL:
+                        stats["timing_marginal"] = (
+                            stats.get("timing_marginal", 0) + 1)
+
         # An offset only means anything next to the sheet it was measured
         # against, so the sheet goes in with the lookup. If lyrics_fetch has
         # since swapped in a different one, the measurement is refused rather
@@ -1659,6 +1664,18 @@ def main():
     if stats.get("timing_rejected"):
         print(f"    timings refused, wrong edit       "
               f"{stats['timing_rejected']:4}   (words kept)")
+    # What passed, but only just. Not failures: a run with none of these is
+    # comfortable, and a run with many is one bad threshold away from being
+    # wrong about a lot of files at once.
+    if stats.get("text_marginal"):
+        print(f"    words accepted below {MARGINAL:.2f}         "
+              f"{stats['text_marginal']:4}")
+    if stats.get("timing_marginal"):
+        print(f"    timings accepted below {MARGINAL:.2f}       "
+              f"{stats['timing_marginal']:4}")
+    if stats.get("timing_unknown"):
+        print(f"    timings unjudged, no duration     "
+              f"{stats['timing_unknown']:4}   (source publishes none)")
     print(f"    leading silence trimmed           {stats.get('trimmed', 0):4}")
     if stats.get("trim_failed"):
         print(f"      wanted but not cut              {stats['trim_failed']:4}")

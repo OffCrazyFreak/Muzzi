@@ -905,6 +905,42 @@ when that duration is more than two seconds from your file: the sheet was
 timed against a different edit. A source that publishes none is judged on the
 same rule later, by `write_tags`.
 
+### Words and timings are scored apart
+
+A lyric sheet answers two questions and they fail apart. *Are these this
+song's words* is about the text; *were these timings written for this edit* is
+about the numbers. A sheet can be the right song and still be timed against a
+different master, and that is the common case rather than the odd one: the
+median sheet here is 0.6s out, but 315 of 1178 are more than 2s out and one
+was a 108-second sheet beside a 289-second file.
+
+Answering them together is how good words come to certify bad timestamps, so
+`pipeline/confidence.py` scores them separately and the words survive when
+only the numbers fail. Both bars are 0.5, so a score reads the same way
+whichever half it describes.
+
+The scores are numbers rather than verdicts, which is the part that is new. A
+sheet matched at 0.55 used to be the same thing as one matched at 1.00, and a
+sheet timed 1.9s out the same as one timed exactly. A run now says how much of
+what it wrote only just cleared:
+
+```
+    synced .lrc sidecars                82
+    lyrics refused, wrong song           8
+    timings refused, wrong edit         18   (words kept)
+    words accepted below 0.80            1
+    timings accepted below 0.80         16
+    timings unjudged, no duration        1   (source publishes none)
+```
+
+The last line is its own state on purpose. Deezer publishes no duration for a
+sheet, so its timings cannot be judged this way at all, and *not evidence of
+wrong* is not the same as *evidence of right* even though both are written.
+
+`write_tags` no longer holds its own copy of either rule. It asks
+`confidence.py` for a score and compares it to that module's bar, so the
+number a report shows and the boolean the gate applied cannot disagree.
+
 **Escalating on absence alone was leaving timed lyrics on the table.** LRCLIB
 answering with untimed words counts as an answer, so nothing else was ever
 asked, and 196 entries stayed plain for good even where the same song exists

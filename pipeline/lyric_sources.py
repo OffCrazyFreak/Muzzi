@@ -30,14 +30,17 @@ import time
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
-from pipeline.webmatch import fit  # noqa: E402
+from pipeline.webmatch import MAX_DURATION_DELTA, MIN_FIT, fit  # noqa: E402,F401
 
-# The same bar the LRCLIB picker uses. A source that cannot be checked as
-# strictly as LRCLIB is not allowed a looser one.
-MIN_FIT = 0.5
-# How far a candidate's own duration may sit from the file before its
-# timings are meaningless. Same 2s LRCLIB's signature match uses.
-MAX_DRIFT = 2.0
+# The same bar the LRCLIB picker uses, and the same tolerance write_tags
+# applies at the other end. Imported rather than declared here: they were two
+# floats with the same values and separate comments, which is a pair that
+# drifts the first time one end is tuned. `MIN_FIT` is re-exported because
+# callers already import it from here.
+#
+# How far a candidate's own duration may sit from the file before its timings
+# are meaningless. Same 2s LRCLIB's own signature match uses.
+MAX_DRIFT = MAX_DURATION_DELTA
 
 # Returned instead of a candidate when the source could not be reached. It is
 # a distinct object rather than a flag so a caller cannot mistake it for a

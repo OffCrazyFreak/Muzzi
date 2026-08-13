@@ -142,6 +142,101 @@ def penalty(conn, path, proposed):
     return DISSENT, reasons
 
 
+# ----------------------------------------------------------------- lyrics
+#
+# A lyric sheet answers two questions and they fail apart. "Are these this
+# song's words" is about the text; "were these timings written for this edit"
+# is about the numbers. A sheet can be the right song and still be timed
+# against a different master, which is the common case rather than the odd
+# one: measured here, the median sheet is 0.6s out and 315 of 1178 are more
+# than 2s out.
+#
+# Answering them together is how good words come to certify bad timestamps.
+# So they are scored separately, and the words survive when only the numbers
+# fail.
+
+# The bar each score has to clear. Both are 0.5 so that a score reads the same
+# way whichever half it describes, and so `score >= BAR` is exactly the
+# boolean the gates in write_tags have always applied.
+LYRIC_TEXT_BAR = 0.5
+LYRIC_TIMING_BAR = 0.5
+
+
+def lyric_text(entry, verified=None, artist=None, title=None):
+    """-> (score 0..1, reason). How much these words are this song's.
+
+    The reasons are the ones write_tags has always given, kept verbatim so a
+    review sheet reads the same. What is new is that a pass carries a number:
+    a sheet matched at 0.55 was as good as one matched at 1.00 before, and
+    only the boolean survived to say otherwise.
+
+    Scored, in order:
+      instrumental               0.0   the track has no words at all
+      confirmed by the audio     1.0   the transcript settles it
+      no recorded match          0.0   absence of evidence is not agreement
+      otherwise      min(artist fit, title fit)
+    """
+    from pipeline.webmatch import MIN_FIT, fit
+    if not entry or not isinstance(entry, dict):
+        return 1.0, None                 # nothing was offered, nothing to doubt
+    if verified and verified.get("instrumental"):
+        return 0.0, "instrumental"
+    confirmed = bool(verified and verified.get("verdict") == "confirmed")
+    matched = entry.get("matched") or ""
+    if " - " not in matched:
+        if entry.get("synced") or entry.get("plain"):
+            return (1.0, None) if confirmed else (0.0, "unverifiable_match")
+        return 1.0, None
+    ma, _, mt = matched.partition(" - ")
+    # Prefer the fits the picker already stamped; fall back to computing them
+    # so an entry written by an older selector is still judged.
+    af, tf = entry.get("artist_fit"), entry.get("title_fit")
+    if artist and af is None:
+        af = fit(artist, ma)
+    if title and tf is None:
+        tf = fit(title, mt)
+    if artist and af is not None and af < MIN_FIT:
+        return (1.0, None) if confirmed else (0.0, "wrong_artist")
+    if title and tf is not None and tf < MIN_FIT:
+        return (1.0, None) if confirmed else (0.0, "wrong_title")
+    # Only the halves that were actually checked. A fit is stamped on the
+    # entry whether or not the caller supplied the name to compare it with,
+    # and scoring an unchecked one would fail a sheet on a comparison nobody
+    # made: a stamped title_fit of 0.0 with no title to check against means
+    # "not measured", not "wrong".
+    got = [x for want, x in ((artist, af), (title, tf))
+           if want and x is not None]
+    return (min(got) if got else 1.0), None
+
+
+def lyric_timing(entry, decoded_secs=None, cut=0.0):
+    """-> (score 0..1 or None, reason). How much the timings fit this file.
+
+    None means unknown rather than good: a sheet that publishes no duration,
+    like Deezer's, cannot be judged here and is not evidence of anything. The
+    caller treats it as passing, which is what has always happened, but the
+    two are worth telling apart when reporting.
+
+    Below the bar exactly when the drift exceeds the tolerance the gate has
+    always used, so a passing sheet keeps its timings and a failing one keeps
+    its words.
+
+    `cut` is subtracted because `decoded_secs` describes the untrimmed source
+    while the copy we ship is `cut` seconds shorter, and the sheet was timed
+    against a master with no padding at all.
+    """
+    from pipeline.webmatch import MAX_DURATION_DELTA
+    md = entry.get("matched_duration") if isinstance(entry, dict) else None
+    if not md or not decoded_secs:
+        return None, None
+    drift = abs((decoded_secs - (cut or 0.0)) - md)
+    if drift > MAX_DURATION_DELTA:
+        return 0.0, "duration_mismatch"
+    # Linear from 1.0 at no drift to the bar at the tolerance, so a sheet 1.9s
+    # out is visibly weaker than one 0.1s out while both still pass.
+    return 1.0 - (drift / MAX_DURATION_DELTA) * (1.0 - LYRIC_TIMING_BAR), None
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__,
