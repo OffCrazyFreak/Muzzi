@@ -55,9 +55,10 @@ That is why:
   invented artist called `Shop`. The credit also stops where the next bracket
   starts, so `Heroes ft. Tove Lo (Bvrnout Remix)` credits `Tove Lo` and leaves
   the remix note on the title, instead of inventing an artist called
-  `Tove Lo (Bvrnout Remix` with a bracket it never closes. Splitting a credit
-  on one separator cannot leave another stranded either: `DJ Denial X & SHA`
-  is two artists, not `DJ Denial` and `& SHA`. Each performer is credited once.
+  `Tove Lo (Bvrnout Remix` with a bracket it never closes. A separator left
+  stranded by a split on a different one is dropped, so `DJ Denial X & SHA` is
+  two artists rather than `DJ Denial` and `& SHA`, while `+44` and `C++` keep
+  their punctuation. Each performer is credited once.
 - Lyrics are written twice: embedded (Namida and most players read this) and as
   a `.lrc` sidecar (Samsung Music reads **only** sidecars).
 - A sheet has to be the right song *and* the right edit. Lyrics whose artist or
