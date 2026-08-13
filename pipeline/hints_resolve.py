@@ -65,6 +65,25 @@ def _quoted(s):
 
 def _unquote(s):
     return (s or "").strip().strip(_QUOTES).strip()
+
+
+# A closing quote followed by a dash is a separator even with no space before
+# it. '"This is my Biome"- A Minecraft Parody' has none, so _SPLIT left the
+# title whole and it fell out at the bare-dash fallback further down, which
+# named the song as its own artist: the defect the quoted-title rule exists to
+# stop, reached by a different road.
+_QUOTE_DASH = re.compile(r"(?<=[" + _QUOTES + r"])\s*[-\u2013\u2014]\s+")
+
+
+def _split_title(s):
+    """-> the parts of a video title, on any separator it actually uses."""
+    parts = [p.strip() for p in _SPLIT.split(s or "") if p.strip()]
+    if len(parts) < 2:
+        parts = [p.strip() for p in _QUOTE_DASH.split(s or "", maxsplit=1)
+                 if p.strip()]
+    return parts
+
+
 # The same YouTube title cruft the filename parser strips.
 _CRUFT = re.compile(
     r"""\s*[\(\[\|]?\s*
@@ -380,7 +399,7 @@ def names_from(info):
                     m.group(1).strip(), "description")
 
     title = clean_title(info.get("video_title") or "")
-    parts = [p.strip() for p in _SPLIT.split(title) if p.strip()]
+    parts = _split_title(title)
     if len(parts) >= 2:
         # A quoted left side plus a description on the right is not a credit.
         # '"This is my Biome" - A Minecraft Parody of Maroon 5 Payphone' was
@@ -392,8 +411,7 @@ def names_from(info):
         # here the left side reads 'This is my Biome"' and no longer looks
         # quoted at all. '"Weird Al" Yankovic' is not caught, because it does
         # not END on a quote: that really is the artist.
-        raw = [p.strip() for p in
-               _SPLIT.split(info.get("video_title") or "") if p.strip()]
+        raw = _split_title(info.get("video_title") or "")
         if (raw and _quoted(raw[0])
                 and _DESCRIBES.match(" - ".join(parts[1:]))):
             said = _unquote(raw[0])

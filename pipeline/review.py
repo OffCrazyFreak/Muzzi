@@ -951,17 +951,24 @@ def main():
         elif kind == "url":
             vid = _video_id(payload)
             res = yt.get(vid or "")
-            if res and not res.get("error") and res.get("artist"):
+            # Anything written next to the link is your judgement and beats
+            # whatever the video's own metadata said. Read before the branch,
+            # not inside it: a link that names the song but not the artist is
+            # answered by writing the artist beside it, and testing only
+            # res["artist"] made that the one case where the note was parsed
+            # and then ignored.
+            note = hint_note(payload)
+            resolved = bool(res) and not res.get("error")
+            if resolved and (res.get("artist") or
+                             (res.get("title") and note.get("artist"))):
                 m = dict(m or {})
-                m["artist"], m["title"] = res["artist"], res["title"]
+                m["artist"] = res.get("artist") or note["artist"]
+                m["title"] = res["title"]
                 if res.get("recording_id"):
                     m["recording_id"] = res["recording_id"]
                 rel = dict(res.get("release") or rel or {})
                 m["release"] = rel
                 m["source"] = "youtube-hint"
-                # Anything written next to the link is your judgement and
-                # beats whatever the video's own metadata said.
-                note = hint_note(payload)
                 for k in ("artist", "title"):
                     if note.get(k):
                         m[k] = note[k]
@@ -984,12 +991,12 @@ def main():
                 reasons = [f"{where} ({res.get('derived_from')}"
                            f"{', your note' if note else ''}"
                            f"{', confirmed on MusicBrainz' if res.get('enriched') else ''})"]
-            elif res and not res.get("error") and res.get("title"):
-                # Resolved, and it deliberately named no artist: the video
-                # title said what the song is called without saying who by,
-                # so hints_resolve declined to invent one. Saying "not
-                # resolved yet" here would send you off to re-run a stage
-                # that has already done its job and would decline again.
+            elif resolved and res.get("title"):
+                # Resolved, it named no artist, and you have not supplied one
+                # either. hints_resolve declined to invent one, so the row
+                # stays in the queue saying what it does know. Saying "not
+                # resolved yet" here would send you off to re-run a stage that
+                # has already done its job and would decline again.
                 reasons = (reasons or []) + [
                     f"your link says the song is \"{res['title']}\" but names "
                     f"no artist - add one as 'artist: X' beside the link"]
