@@ -537,8 +537,9 @@ def fetch(artist, title, cache, session, album=None, duration=None,
     # Escalating only on absence was the older rule, and it left the 196
     # plain-only entries in this cache permanently plain: LRCLIB answering
     # with untimed words counts as an answer, so nothing else was ever asked,
-    # even when Deezer holds the same song timed. Measured over 80 tracks,
-    # that is 9 of 40 Balkan tracks and 3 of 40 others.
+    # even when Deezer holds the same song timed. Measured by running this
+    # stage over a frozen 160-track sample: 12 tracks gained timings, 8 of
+    # them Balkan, which is 14% of that cohort against 4% of the rest.
     #
     # Timed words are strictly better than untimed ones for the same song, and
     # the sheet is judged by the same gates either way, so there is no case
@@ -552,6 +553,16 @@ def fetch(artist, title, cache, session, album=None, duration=None,
             # Suppress every absence below so nothing is written and the next
             # run asks again, exactly as an LRCLIB error already does.
             saw_answer, near, alt = False, None, None
+            if untimed:
+                # LRCLIB's untimed words are worth returning for this run, and
+                # writing them would end the matter for good: they would be
+                # stored `ok` under the current selector, the early return at
+                # the top would hand them back for ever, and the timed answer
+                # that merely could not be reached would never be asked for
+                # again. Recording an outage as an answer, one field down.
+                return {"synced": None,
+                        "plain": best.get("plainLyrics") or None,
+                        "status": "error"}
         # When LRCLIB already gave us words, only a TIMED answer is worth
         # taking. Swapping one set of untimed words for another changes the
         # provenance and nothing else.

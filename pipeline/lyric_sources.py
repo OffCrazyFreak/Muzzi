@@ -203,14 +203,22 @@ def from_deezer(artist, title, deezer_id, session=None):
     if not deezer_id:
         return None
     from pipeline import health
-    if health.blocked("deezer_lyrics"):
+    state, _why = health.check("deezer_lyrics")
+    if state == health.NO_KEY:
+        # Nobody gave this installation an ARL. That is a permanent, known
+        # absence of a capability, not a source that failed, and returning
+        # ERROR for it would mean an install without the cookie could never
+        # record an absence for any track: every run would re-ask every
+        # source for ever, because one of them is forever "unreachable".
+        return None
+    if state not in health.USABLE:
         return ERROR
     import requests
     s = session or requests.Session()
     token = _deezer_jwt(s)
     if not token:
-        # No ARL configured is an absence of a capability, not of lyrics, and
-        # the caller must not cache it as either.
+        # The probe said it was usable and the exchange still failed, so this
+        # is a real failure rather than a missing credential.
         return ERROR
     try:
         r = s.post("https://pipe.deezer.com/api",

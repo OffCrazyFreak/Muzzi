@@ -890,15 +890,20 @@ closed.
 
 ## Timed lyrics, and where they come from
 
-LRCLIB first, and it is the only one that publishes a duration to match
-against. When it has nothing, or when what it has carries no timings, the
-others are asked:
+LRCLIB first. When it has nothing, or when what it has carries no timings, the
+others are asked in this order:
 
-| Source | Gives | Note |
-|---|---|---|
-| **Deezer** | timed | Asked by the exact track id the cascade already resolved, so it does no searching |
-| **YouTube Music** | timed | Carries the regional releases LRCLIB has never been given |
-| **Genius** | words only | Untimed words still beat timed words belonging to a different song |
+| Source | Gives | Publishes a duration | Note |
+|---|---|---|---|
+| **LRCLIB** | timed | yes, for the sheet | Asked first; the only one whose duration belongs to the lyrics rather than to a recording |
+| **Deezer** | timed | no | Asked by the exact track id the cascade already resolved, so it does no searching |
+| **YouTube Music** | timed | yes, for its track | Carries the regional releases LRCLIB has never been given |
+| **Genius** | words only | no | Untimed words still beat timed words belonging to a different song |
+
+A source that publishes a duration has its timings dropped, keeping the words,
+when that duration is more than two seconds from your file: the sheet was
+timed against a different edit. A source that publishes none is judged on the
+same rule later, by `write_tags`.
 
 **Escalating on absence alone was leaving timed lyrics on the table.** LRCLIB
 answering with untimed words counts as an answer, so nothing else was ever
