@@ -22,7 +22,13 @@ ytmusicapi==1.12.2
 # ------------------------------- required by the beets plugins in config.yaml
 # discogs, lastgenre, lyrics and the Discogs OAuth flow. beets does not declare
 # these itself, so leaving one out fails at plugin load, not at install.
-discogs-client==2.3.0
+#
+# python3-discogs-client is the maintained fork. Discogs deprecated the
+# original discogs-client in 2020 and beets requires this one (>=2.3.15); the
+# old pin only ever worked because both packages install a module called
+# discogs_client and the constructor signature happened to match. It also
+# backs off and retries on Discogs' 429, which the legacy client never did.
+python3-discogs-client==2.9
 pylast==7.1.0
 beautifulsoup4==4.15.0
 requests-oauthlib==2.0.0
