@@ -31,6 +31,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 RATE_LIMIT = 2.5
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, HERE)
+
+from pipeline import sources  # noqa: E402
 CACHE = os.path.join(HERE, "cache", "fingerprints.json")
 
 BCMS_CHARS = set("čćšžđČĆŠŽĐ")
@@ -89,13 +92,7 @@ def main():
 
     files = []
     for root in args.root:
-     # followlinks: a folder in input/ is usually a symlink to another
-     # partition, and os.walk skips those by default, which would report
-     # an empty library rather than an error.
-     for dirpath, _, names in os.walk(root, followlinks=True):
-        for n in sorted(names):
-            if n.lower().endswith((".mp3", ".m4a", ".flac", ".opus", ".ogg", ".wav")):
-                files.append(os.path.join(dirpath, n))
+        files.extend(sources.walk(root))
     if args.limit:
         files = files[: args.limit]
 

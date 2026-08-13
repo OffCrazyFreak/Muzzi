@@ -34,6 +34,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
+
+from pipeline import sources  # noqa: E402
 CACHE = os.path.join(HERE, "cache", "analysis.json")
 FEATDIR = os.path.join(HERE, "features")
 AUDIT_TRUTH = os.path.join(HERE, "cache", "audit_truth.json")
@@ -657,12 +659,7 @@ def main():
 
     todo = []
     for root in args.root:
-     # followlinks, same reason as fingerprint: input/ holds symlinks.
-     for dirpath, _, names in os.walk(root, followlinks=True):
-        for n in sorted(names):
-            if not n.lower().endswith((".mp3", ".m4a", ".flac", ".opus", ".ogg", ".wav")):
-                continue
-            p = os.path.join(dirpath, n)
+        for p in sources.walk(root):
             # Fall back to the path when no fingerprint exists, so analysis is
             # never blocked on the fingerprint stage having run.
             fp = fps.get(p, "path:" + p)
