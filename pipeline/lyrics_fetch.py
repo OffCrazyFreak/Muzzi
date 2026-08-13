@@ -287,15 +287,22 @@ def _good(entry):
 
 
 def _from_other_sources(artist, title, duration):
-    """-> a candidate from the non-LRCLIB sources, gated the same way.
+    """-> a candidate, None, or lyric_sources.ERROR.
 
     Order is by what the answer is worth: timed lyrics that fit the file
     first, then any timed lyrics, then plain words. Untimed words beat timed
     words belonging to a different song, which is the whole reason this comes
     after LRCLIB rather than instead of it.
+
+    ERROR when a source could not be asked and no other source answered. The
+    caller must not record an absence on that, for the same reason LRCLIB's
+    own errors have never been cached.
     """
     from pipeline import lyric_sources
+    failed = False
     got = lyric_sources.from_ytmusic(artist, title, duration)
+    if got is lyric_sources.ERROR:
+        failed, got = True, None
     if got and got.get("synced"):
         # Its timings were written for ITS copy of the song. A file that is
         # a different length carries a different edit, so keep the words and
@@ -308,8 +315,12 @@ def _from_other_sources(artist, title, duration):
         return got
     token = _genius_token()
     if token:
-        return lyric_sources.from_genius(artist, title, token)
-    return None
+        g = lyric_sources.from_genius(artist, title, token)
+        if g is lyric_sources.ERROR:
+            failed = True
+        elif g:
+            return g
+    return lyric_sources.ERROR if failed else None
 
 
 def _genius_token():
@@ -437,7 +448,13 @@ def fetch(artist, title, cache, session, album=None, duration=None):
     # recording an absence: LRCLIB is thin outside English, which is most of
     # this library, and YouTube Music carries the same songs timed.
     if best is None:
+        from pipeline import lyric_sources
         alt = _from_other_sources(artist, title, duration)
+        if alt is lyric_sources.ERROR:
+            # A source we could not reach is not a source that said no.
+            # Suppress every absence below so nothing is written and the next
+            # run asks again, exactly as an LRCLIB error already does.
+            saw_answer, near, alt = False, None, None
         if alt:
             alt.update({"status": "ok", "selector": SELECTOR,
                         "artist_fit": fit(artist, alt["matched"].partition(" - ")[0])

@@ -252,7 +252,7 @@ can't be wrong about which file it's describing:
 | `cascade` | fixpoint loop: each resolver declares what it needs and gives, and keeps firing until nothing new appears. `artist+title -> Deezer track -> ISRC -> exact lookups -> album -> release-group -> artwork` |
 | `enrich_release` | years, from album + artist |
 | `fetch_art` | downloads artwork, once per album |
-| `lyrics_fetch` | LRCLIB first, preferring synced lyrics and choosing by duration match. When LRCLIB has nothing, YouTube Music and then Genius are asked, judged against the same name comparison, so no source gets a looser standard than another. A sheet whose own recording is more than 2 seconds from your file keeps its words and loses its timings |
+| `lyrics_fetch` | LRCLIB first, preferring synced lyrics and choosing by duration match. When LRCLIB has nothing, YouTube Music and then Genius are asked, judged against the same name comparison, so no source gets a looser standard than another. A YouTube Music sheet whose own recording is more than 2 seconds from your file keeps its words and loses its timings here; an LRCLIB sheet carries its duration with it and is judged the same way later, by `write_tags` |
 | `genres` | collapses multi-source genre soup into one canonical genre, and holds the whitelist that is the only vocabulary allowed to reach a file |
 | `origin` | which country each artist is from, from Last.fm tags cross-checked against ISRC |
 | `lastfm_tags` | community tags for every artist and track. Cached, so the ~20 minutes it takes happens once |
