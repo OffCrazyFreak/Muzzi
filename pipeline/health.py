@@ -83,6 +83,14 @@ _state = {}
 
 PROBE_ARTIST, PROBE_TITLE = "Rick Astley", "Never Gonna Give You Up"
 
+# Deezer's lyrics are asked by id rather than by name, so its probe cannot use
+# the query above and needs actual rows. More than one, from different labels
+# and decades, so the probe is not a bet on a single catalogue entry surviving.
+#   3135556     Daft Punk, Harder Better Faster Stronger
+#   916424      Gotye, Somebody That I Used To Know
+#   1109731     Adele, Rolling in the Deep
+DEEZER_PROBE_TRACKS = ("3135556", "916424", "1109731")
+
 
 def _session():
     import requests
@@ -206,28 +214,37 @@ def _deezer_lyrics(s):
         # valid. That is a key problem, not an outage, and it needs a person.
         return BAD_KEY, "the ARL was not accepted; log in again and replace it"
 
-    # Daft Punk, "Harder, Better, Faster, Stronger". A track that will not be
-    # withdrawn, asked by id so a search cannot be what fails.
+    # Asked by id, so a search cannot be what fails. More than one id, because
+    # a single one makes this probe a bet on one catalogue row: if that track
+    # were ever withdrawn or lost its lyrics, the probe would report the whole
+    # endpoint broken and the source would be disabled for good. The second is
+    # only asked when the first disappoints, so the usual cost is one request.
     query = ("query P($id: String!) { track(trackId: $id) "
              "{ title lyrics { text } } }")
-    try:
-        r = s.post("https://pipe.deezer.com/api",
-                   headers={"Authorization": f"Bearer {jwt}"},
-                   json={"operationName": "P", "variables": {"id": "3135556"},
-                         "query": query}, timeout=20)
-        if r.status_code != 200:
-            return DOWN, f"pipe returned HTTP {r.status_code}"
-        d = r.json()
-    except Exception as e:
-        return DOWN, f"pipe {type(e).__name__}: {str(e)[:40]}"
-    if d.get("errors"):
-        # A GraphQL error on a fixed query means the schema moved under us,
-        # which is the standing hazard of an unofficial endpoint.
-        return CHANGED, str(d["errors"])[:70]
-    track = ((d.get("data") or {}).get("track") or {})
-    if not ((track.get("lyrics") or {}).get("text") or "").strip():
-        return CHANGED, "no lyrics for a track it certainly has"
-    return OK, f"answered for {track.get('title')!r}"
+    last = "no track answered"
+    for tid in DEEZER_PROBE_TRACKS:
+        try:
+            r = s.post("https://pipe.deezer.com/api",
+                       headers={"Authorization": f"Bearer {jwt}"},
+                       json={"operationName": "P", "variables": {"id": tid},
+                             "query": query}, timeout=20)
+            if r.status_code != 200:
+                return DOWN, f"pipe returned HTTP {r.status_code}"
+            d = r.json()
+        except Exception as e:
+            return DOWN, f"pipe {type(e).__name__}: {str(e)[:40]}"
+        if d.get("errors"):
+            # A GraphQL error on a fixed query means the schema moved under
+            # us, which is the standing hazard of an unofficial endpoint. It
+            # is about the query, not the track, so there is no point trying
+            # another one.
+            return CHANGED, str(d["errors"])[:70]
+        track = ((d.get("data") or {}).get("track") or {})
+        if ((track.get("lyrics") or {}).get("text") or "").strip():
+            return OK, f"answered for {track.get('title')!r}"
+        last = f"no lyrics for track {tid}"
+    return CHANGED, (f"{last}, and none of {len(DEEZER_PROBE_TRACKS)} "
+                     f"probe tracks had any")
 
 
 def _genius(s):
@@ -263,9 +280,14 @@ def secret(name):
         return None
     try:
         with open(p, encoding="utf-8") as fh:
-            return json.load(fh).get(name) or None
+            values = json.load(fh)
     except (OSError, ValueError):
         return None
+    # A secrets file holding valid JSON that is not an object parses fine and
+    # then raises on .get, which would escape this module: _deezer_jwt calls
+    # this outside a try, so a stray `[]` in the file would crash a lyric
+    # sweep rather than reading as "no key".
+    return values.get(name) or None if isinstance(values, dict) else None
 
 
 PROBES = {
