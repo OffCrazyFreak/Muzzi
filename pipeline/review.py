@@ -23,6 +23,7 @@ from difflib import SequenceMatcher
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
+from pipeline import confidence, evidence  # noqa: E402
 from pipeline.fingerprint import likely_balkan  # noqa: E402
 from pipeline.probe_match import split_name  # noqa: E402,F401
 from pipeline import tagseed  # noqa: E402
@@ -954,6 +955,17 @@ def main():
             "cover_url": w.get("cover"),
         }
 
+    # The evidence store, if there is one. Absent is normal: nothing has run
+    # `evidence.py --backfill` on a fresh clone, and scoring has to work
+    # without it rather than making it a requirement.
+    ev = None
+    if os.path.exists(evidence.DB):
+        try:
+            ev = evidence.connect(evidence.DB, readonly=True)
+        except Exception as exc:                          # pragma: no cover
+            print(f"  evidence store unreadable, scoring without it: "
+                  f"{str(exc)[:60]}")
+
     rows = []
     for path, e in ident.items():
         # A source file can be deleted between runs -- a duplicate you removed
@@ -1084,6 +1096,16 @@ def main():
             e["match"] = m
             conf = 1.0
             reasons = ["set by you"]
+
+        # What every other source said about this name, counted in independent
+        # families. Applied after the hint block on purpose: an answer you gave
+        # is not something a catalogue gets to argue with.
+        if ev is not None and conf < 1.0:
+            mult, why = confidence.penalty(
+                ev, path, {"artist": m.get("artist"), "title": m.get("title")})
+            if why:
+                conf *= mult
+                reasons = (reasons or []) + why
 
         tier = ("unmatched" if kind == "reject" else
                 "auto" if (kind in ("confirm", "override")

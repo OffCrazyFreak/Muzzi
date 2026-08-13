@@ -976,6 +976,47 @@ one of those tracks was treated as having no lyrics from then on.
 Nothing here decides anything, and no conclusion is written back, so a fact
 that arrives later cannot leave a stale decision behind it.
 
+### What the store is allowed to do to a score
+
+```bash
+./.venv/bin/python pipeline/confidence.py
+```
+
+`review` scores a match on how well one proposal fits the filename, which
+answers "is this plausible" and cannot answer "did anything else agree". The
+store answers the second, and for now it is allowed to do exactly one thing
+with the answer: **lower** a score when an independent family contests the
+proposed artist or title.
+
+It never raises one. Agreement between independent families is real evidence
+and will be worth something, but a score that goes up moves a track out of
+review unseen, and the bar it would cross was calibrated against a scorer that
+did not have this. Raising comes later, as a change that can be measured on
+its own.
+
+Three things are not a contest:
+
+- **An answer you gave.** Your answer outranks any lookup by construction, so
+  a catalogue disagreeing with it is not a reason to ask you again. Ranking on
+  family count alone let two catalogues outvote a hand-given name, which
+  marked 28 artists as contested where the only thing contesting them was a
+  database arguing with the person who had already settled it.
+- **The file's own tags, its name and its folder.** Those are one family, not
+  three, because they descend from the same download name, and a download name
+  disagreeing with a catalogue is the normal case rather than a dispute.
+- **A family that also supports the winner.** One catalogue holding two
+  pressings is not a second opinion.
+
+`year` is deliberately excluded. Sources disagree about it constantly, because
+a reissue date and an original release date are both true, and treating that
+as a contradiction would send most of the library to review to answer a
+question nobody asked.
+
+On this library the rule currently fires on nothing at all: 1661 of 1723 rows
+are already at confidence 1.00 because they were confirmed by hand, and none
+of the 64 below that is contested. It is written for the next import rather
+than this one.
+
 ## Auditing what was written
 
 `pipeline/verify.py` reads tags only. To check a tag against the audio it
