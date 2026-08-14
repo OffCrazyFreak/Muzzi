@@ -73,6 +73,13 @@ SHEETS = [
      "do not. Each row carries its own measured length, since the same bumper "
      "runs 8.4s on one file and 3.0s on another."),
 ]
+# Sheets whose rows describe the audio rather than the identity, and which
+# therefore ignore the auto-accept tier. A track can be identified with total
+# confidence and still open with a label bumper or end in dead air, so
+# filtering these by tier hides exactly the rows they exist to show: measured
+# here, it dropped 101 of 106 shared-intro rows and left 5.
+ABOUT_THE_AUDIO = {"intro"}
+
 OUT = os.path.join(HERE, "cache", "review.json")
 DUPES = os.path.join(HERE, "cache", "duplicates.json")
 YT_HINTS = os.path.join(HERE, "cache", "hint_youtube.json")
@@ -725,7 +732,9 @@ def publish_sheets(groups, hints):
 
     made = []
     for number, (label, key, note) in enumerate(SHEETS, 1):
-        items = [r for r in groups.get(key) or [] if r["tier"] != "auto"]
+        items = groups.get(key) or []
+        if key not in ABOUT_THE_AUDIO:
+            items = [r for r in items if r["tier"] != "auto"]
         if not items:
             continue
         attach_dossier(items)
