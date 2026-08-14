@@ -602,6 +602,19 @@ def main():
         kind, payload = review_mod.parse_hint(hint)
         if kind == "url":
             urls[name] = payload
+    # And the links, which live in a column of their own. A URL is a URL
+    # whichever column it was typed in, and the split exists only so that a
+    # bare "y" answering the link sheet is not read as confirming an identity.
+    # Without this, 48 links reached yt_links and none of them reached the
+    # metadata lookup, so a video you named was used to tag a file only if you
+    # happened to paste it into the other column.
+    #
+    # The hint column wins on a conflict: it carries the note that goes with
+    # the URL ("artist: X"), and that note is your judgement about the song.
+    for name, link in review_mod.load_links().items():
+        kind, payload = review_mod.parse_hint(link)
+        if kind == "url":
+            urls.setdefault(name, payload)
     if not urls:
         print("  no YouTube-URL hints found in the review queues\n")
         return 0
