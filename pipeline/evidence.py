@@ -121,6 +121,7 @@ FAMILY = {
     "youtube": "google",
     "soundcloud": "soundcloud",
     "lastfm": "lastfm",
+    "ncs": "ncs",
     "lrclib": "lrclib",
     "genius": "genius",
     "netease": "netease",

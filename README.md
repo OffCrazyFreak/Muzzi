@@ -297,6 +297,7 @@ can't be wrong about which file it's describing:
 | `genres` | collapses multi-source genre soup into one canonical genre, and holds the whitelist that is the only vocabulary allowed to reach a file |
 | `origin` | which country each artist is from, from Last.fm tags cross-checked against ISRC |
 | `lastfm_tags` | community tags for every artist and track. Cached, so the ~20 minutes it takes happens once |
+| `ncs` | the NoCopyrightSounds catalogue, for the genre it publishes about its own releases. Folder-triggered and genre-only: it never names an artist or a title, so an NCS-looking folder still cannot prove an NCS release |
 | `scenes` | picks the ONE genre each track gets, most specific evidence first |
 
 **Repair passes** (not part of `run.py`; run them when you want them):

@@ -108,7 +108,8 @@ IMMUTABLE = ("fingerprint", "analyze", "silence")
 # it would make every round look productive.
 FACT_CACHES = ("cascade.json", "lyrics.json", "enrich.json", "webmatch.json",
                "identity.json", "textsearch.json", "lyric_verify.json",
-               "lyric_align.json", "artist_canon.json", "yt_lookup.json")
+               "lyric_align.json", "artist_canon.json", "yt_lookup.json",
+               "ncs.json")
 
 
 def without(phases, names):
@@ -281,6 +282,12 @@ def main():
         ("serial", [stage("artist_names", "--apply"),
                     stage("origin", "--apply"),
                     stage("lastfm_tags"),
+                    # After lastfm_tags, because it overrides what that
+                    # returned for the tracks it covers, and it can only
+                    # override something that is already there. Reads the
+                    # names review settled on, so it goes after the naming
+                    # stages rather than beside the other lookups.
+                    stage("ncs", "--apply"),
                     stage("dedupe_names", "--apply"),
                     # After dedupe_names on purpose: a link found on the copy
                     # that lost is inherited by the one that ships, so this has
