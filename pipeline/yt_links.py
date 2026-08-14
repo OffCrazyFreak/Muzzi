@@ -329,17 +329,25 @@ def decide(path, cands, row, secs, refused=False, confirmed=None):
     source is enough; a lone search result has to prove itself on duration and
     version markers.
     """
-    if not cands or refused:
+    if refused:
         # "n" in the sheet is an answer, not a blank: stop proposing this one
         # and stop asking about it.
         return None, None
     if confirmed:
         # You looked at the video and said it was right. Nothing measured here
         # outranks that, which is the same standing a pasted link already has.
-        src = next((c["source"] for c in cands
+        #
+        # Judged before the candidate list is checked, not after. A confirmed
+        # id can come from the recorded proposal alone, and that is exactly the
+        # case where the candidates have since lapsed: gating it on candidates
+        # would drop the answer in the one situation the recorded proposal
+        # exists to survive.
+        src = next((c["source"] for c in cands or []
                     if c["video_id"] == confirmed), "your answer")
         return {"video_id": confirmed, "trust": "origin",
                 "from": "you confirmed it", "sources": [src]}, None
+    if not cands:
+        return None, None
     origin = [c for c in cands if c["tier"] == "origin"]
     if origin:
         # The file's own comment outranks anything inherited from a copy: it is
