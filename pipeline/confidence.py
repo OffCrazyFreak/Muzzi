@@ -185,12 +185,17 @@ def timed_sheet(entry):
     NCS instrumental was offered 4000 characters of someone else's PLAIN text.
     A wrong match hands over prose, not a forty-line LRC timed to this
     recording, so plain-only entries stay refused.
+
+    Counted with the same parser that writes a sheet out to a file, so "timed
+    line" means here what it means there. Counting non-empty lines instead
+    would let plain prose that happened to land in the `synced` field clear
+    the bar, which is the exact hole this discriminator exists to close: a
+    wrong match hands over prose, and prose has line breaks too.
     """
     if not isinstance(entry, dict):
         return False
-    synced = entry.get("synced") or ""
-    return len([ln for ln in synced.splitlines() if ln.strip()]) \
-        >= MIN_TIMED_LINES
+    from pipeline import lrc
+    return len(lrc.lines(entry.get("synced") or "")) >= MIN_TIMED_LINES
 
 
 def lyric_text(entry, verified=None, artist=None, title=None):
