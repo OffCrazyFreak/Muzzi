@@ -161,6 +161,42 @@ def penalty(conn, path, proposed):
 LYRIC_TEXT_BAR = 0.5
 LYRIC_TIMING_BAR = 0.5
 
+# A timed sheet this long is a person's work against a specific recording, and
+# nobody writes one for an instrumental.
+MIN_TIMED_LINES = 8
+
+
+def timed_sheet(entry):
+    """-> True when this entry holds a long, human-timed LRC.
+
+    Evidence that the song has words, independent of whether our own model
+    could hear them. It matters because "instrumental" here means "under three
+    transcribed words", and a transcript can be empty for two very different
+    reasons: the track has no vocals, or the model cannot hear this kind of
+    music. Croatian and Serbian are tier 3 for Whisper before the singing is
+    taken into account, so the second happens a lot.
+
+    Measured on the library: 60 tracks are marked instrumental while a source
+    has words for them, 59 of those match their sheet's name at 0.85 or
+    better, and 45 hold a synced sheet of 37 to 55 timed lines. Tony
+    Cetinski's "Kad Žena Zavoli" is not an instrumental.
+
+    The failure this guards against runs the other way and is left guarded: an
+    NCS instrumental was offered 4000 characters of someone else's PLAIN text.
+    A wrong match hands over prose, not a forty-line LRC timed to this
+    recording, so plain-only entries stay refused.
+
+    Counted with the same parser that writes a sheet out to a file, so "timed
+    line" means here what it means there. Counting non-empty lines instead
+    would let plain prose that happened to land in the `synced` field clear
+    the bar, which is the exact hole this discriminator exists to close: a
+    wrong match hands over prose, and prose has line breaks too.
+    """
+    if not isinstance(entry, dict):
+        return False
+    from pipeline import lrc
+    return len(lrc.lines(entry.get("synced") or "")) >= MIN_TIMED_LINES
+
 
 def lyric_text(entry, verified=None, artist=None, title=None):
     """-> (score 0..1, reason). How much these words are this song's.
@@ -179,7 +215,7 @@ def lyric_text(entry, verified=None, artist=None, title=None):
     from pipeline.webmatch import MIN_FIT, fit
     if not entry or not isinstance(entry, dict):
         return 1.0, None                 # nothing was offered, nothing to doubt
-    if verified and verified.get("instrumental"):
+    if verified and verified.get("instrumental") and not timed_sheet(entry):
         return 0.0, "instrumental"
     confirmed = bool(verified and verified.get("verdict") == "confirmed")
     matched = entry.get("matched") or ""

@@ -38,6 +38,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
 from pipeline import lyrics_fetch  # noqa: E402
+from pipeline import transcribe  # noqa: E402
 
 REVIEW = os.path.join(HERE, "cache", "review.json")
 OUT = os.path.join(HERE, "cache", "lyric_verify.json")
@@ -153,18 +154,25 @@ def transcribe_one(task):
         # Whisper's own VAD pick speech regions across a wider window instead.
         lo = max(10.0, dur * 0.12)
         hi = min(dur - 2.0, lo + excerpt * 3.0) if dur else lo + 135.0
-        segs, info = model.transcribe(
-            path, beam_size=1, without_timestamps=False, vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 700,
-                            "speech_pad_ms": 200},
+        def collect(segs):
+            picked, budget = [], excerpt
+            for seg in segs:
+                picked.append(seg.text.strip())
+                budget -= max(0.0, (seg.end or 0) - (seg.start or 0))
+                if budget <= 0:
+                    break
+            text = " ".join(picked)
+            return text, len(norm_words(text))
+
+        # The voice-activity filter is trained on speech and hands Whisper
+        # silence on a lot of sung audio, worst on the Balkan half. That
+        # matters most here of all: this transcript is what waives a name
+        # mismatch, so a starved one refuses lyrics on exactly the tracks
+        # whose names the catalogues disagree about. Dropped and asked again
+        # when the answer is implausibly thin.
+        transcript, info, used_vad = transcribe.listen(
+            model, path, collect, beam_size=1, without_timestamps=False,
             clip_timestamps=[lo, max(hi, lo + excerpt)])
-        picked, budget = [], excerpt
-        for seg in segs:
-            picked.append(seg.text.strip())
-            budget -= max(0.0, (seg.end or 0) - (seg.start or 0))
-            if budget <= 0:
-                break
-        transcript = " ".join(picked)
         sc = round(containment(transcript, lyrics), 3)
         # Whisper always returns SOME language, even for silence. On the NCS
         # instrumental tracks it emitted Khmer at 0.35 confidence with an empty
@@ -182,6 +190,10 @@ def transcribe_one(task):
             # sung. Combined with no lyric sheet existing, that is an
             # instrumental rather than a failure to transcribe.
             "instrumental": words < 3,
+            # Whether the filter was kept. An entry recorded without it is one
+            # that would have been silent before, so a run can count how much
+            # of its evidence the old setting was throwing away.
+            "vad": used_vad,
             "transcript": transcript[:300],
             "score": sc,
             # Confirm on strong overlap, but never auto-REJECT on a low score:

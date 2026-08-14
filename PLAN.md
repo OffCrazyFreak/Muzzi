@@ -180,6 +180,17 @@ identical to a wrong song. Low means "unverified", not "wrong".
   why `pipeline/health.py` probes check the *answer*, not the status code.
 - **Megalobiz** does not respond at all from here. Not a timeout under load:
   the connection is refused outright, on the root as well as on a search.
+- **Generating an LRC from a plain sheet** was measured and dropped. The idea
+  was sound: the words come from a human source and Whisper supplies only the
+  timings, which is the half it is good at. It does not work here. Aligning
+  each line of a plain sheet against a word-timestamped transcript matched
+  58%, 37%, 18%, 15%, 6% and 0% of lines on six tracks, median around 18%.
+  A sheet with a fifth of its lines timed is not an LRC, and interpolating the
+  rest is exactly the drift the timing gate exists to refuse. The cause is not
+  fixable by settings: Croatian and Serbian are tier 3 for Whisper before the
+  singing is taken into account, and `base` returns nothing at all on Balkan
+  ballads whatever the filter does. Re-timing a sheet that already HAS
+  timings still works and is what `lyric_align` does.
 - **`syncedlyrics`** would have wrapped both. It is MIT and it works, but it
   has had no release in twelve months and already ships two providers its own
   README calls broken. A dormant wrapper around sources that fail silently
