@@ -149,16 +149,54 @@ def extract(path):
     return out
 
 
-def build(roots, cache_path=None):
-    """Scan roots and return {path: seed}. Cheap: tag reads only."""
+def _stamp(path):
+    """-> (size, mtime) for a file, or None when it cannot be read."""
+    try:
+        st = os.stat(path)
+        return [st.st_size, int(st.st_mtime)]
+    except OSError:
+        return None
+
+
+def build(roots, cache_path=None, previous=None):
+    """Scan roots and return {path: seed}. Cheap: tag reads only.
+
+    Incremental, and keyed on size and mtime rather than on the path alone. A
+    file whose tags were rewritten keeps its old seed forever otherwise, which
+    is what happened here: not one cached entry recorded either, so nothing
+    could tell a re-tagged file from an untouched one, and the pipeline read
+    an artist the file no longer carried.
+
+    A file with no usable tags gets no entry, so `previous` is consulted for
+    its stamp rather than its seed: without that, every one of the 466 files
+    here that legitimately have nothing would be re-read on every run.
+    """
     import json
-    seeds = {}
+    seeds, stamps = {}, dict((previous or {}).pop("__stamps__", {}))
     for p in sources.walk(roots):
+        now = _stamp(p)
+        # On the stamp alone, never on whether a seed came back. Requiring a
+        # cached seed to skip means every file that legitimately has no tags
+        # is re-read on every run, which here is 466 of them and most of the
+        # cost the cache exists to avoid.
+        if now is not None and stamps.get(p) == now:
+            old = (previous or {}).get(p)
+            if old is not None:
+                seeds[p] = old
+            continue
+        if now is not None:
+            stamps[p] = now
         s = extract(p)
         if s:
             seeds[p] = s
+    # Entries for files that are gone go with them. The cache held 319 of
+    # those, each one a path that would never be looked at again and never
+    # cleaned up either.
+    stamps = {p: v for p, v in stamps.items() if p in seeds or os.path.exists(p)}
     if cache_path:
-        json.dump(seeds, open(cache_path + ".tmp", "w"),
+        out = dict(seeds)
+        out["__stamps__"] = stamps
+        json.dump(out, open(cache_path + ".tmp", "w"),
                   ensure_ascii=False, indent=1)
         os.replace(cache_path + ".tmp", cache_path)
     return seeds
@@ -174,6 +212,9 @@ def load(here=None):
         here = here or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         p = os.path.join(here, "cache", "tagseed.json")
         _CACHE = json.load(open(p)) if os.path.exists(p) else {}
+        # Bookkeeping, not a seed. Left in, a caller iterating the cache would
+        # find one "path" whose value is a map of every other path.
+        _CACHE.pop("__stamps__", None)
     return _CACHE
 
 
@@ -216,13 +257,24 @@ def seed_for(path, stem_fallback):
 
 def main():
     import argparse
+    import json
     from collections import Counter
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("roots", nargs="+")
+    ap.add_argument("--force", action="store_true",
+                    help="re-read every file's tags, ignoring the cache")
     args = ap.parse_args()
     out = os.path.join(here, "cache", "tagseed.json")
-    seeds = build(args.roots, out)
+    previous = {}
+    if os.path.exists(out) and not args.force:
+        try:
+            previous = json.load(open(out))
+        except (OSError, ValueError):
+            previous = {}
+    before = len([k for k in previous if k != "__stamps__"])
+    seeds = build(args.roots, out, previous)
+    print(f"  {before} entries before, {len(seeds)} after")
     c = Counter(s["trust"] for s in seeds.values())
     fixed = [s for s in seeds.values()
              if s["trust"] == "description" and s.get("tag_artist")
