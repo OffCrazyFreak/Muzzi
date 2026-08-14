@@ -19,12 +19,23 @@ is different in ways nobody asked for.
 
 Sources, in order of how much they can be trusted to be the right recording:
 
-  1. the YouTube Music video id the cascade already resolved for this track
+  1. the link recorded against this exact file, from the `link` column of
+     hints.tsv or a URL typed as a hint. An answer about this file, not an
+     inference about a name
+  2. the YouTube Music video id the cascade already resolved for this track
      (an Art Track: the distributor's own audio, no video encode)
-  2. the video id from a link you gave in a review sheet
-  3. a fresh YouTube Music search for artist + title
+  3. a hint whose title matches this track's, which is a guess
+  4. a fresh YouTube Music search for artist + title
 
 Downloads run in batches so a long run can be watched, stopped and resumed.
+
+`--requested` answers a third question: the files you asked for by writing
+"redownload" in a review sheet. No bandwidth bar applies, because you listened
+to it and that is a better measurement of "this sounds wrong" than a spectral
+cutoff. Measured here, 28 files were asked for and several of them sit well
+above the bar, one at 18.6 kHz, so nothing selecting on bandwidth was ever
+going to fetch them. Every other check still applies: a candidate that is a
+different length, or does not decode, is deleted and the original stands.
 
 `--missing` answers a different question with the same machinery: a source
 file that has been deleted keeps erroring in write_tags on every run, and
@@ -41,6 +52,7 @@ Usage:
   redownload.py --batch 50 --limit 100
   redownload.py --min-cutoff 15500   # which files count as needing it
   redownload.py --missing --dry-run  # the sources that are gone
+  redownload.py --requested          # the ones you asked for by name
 """
 import argparse
 import json
@@ -56,6 +68,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
+from pipeline.hints_resolve import video_id  # noqa: E402
 from pipeline.webmatch import fit, version_mismatch  # noqa: E402
 
 REVIEW = os.path.join(HERE, "cache", "review.json")
@@ -81,6 +94,8 @@ def _done_key(path, args):
     exactly the file that may later go missing, and it would then be skipped
     forever as "already attempted".
     """
+    if getattr(args, "requested", False):
+        return f"requested:{path}"
     return f"missing:{path}" if getattr(args, "missing", False) else path
 
 
@@ -118,8 +133,18 @@ def claim(vid, path):
         return True
 
 
-def find_source(row, facts, hints):
-    """-> (video_id, how) or (None, why)."""
+def find_source(row, facts, hints, link=None):
+    """-> (video_id, how) or (None, why).
+
+    `link` is the URL recorded against this exact file, from the `link` column
+    of hints.tsv or a URL typed as a hint. It wins outright: it is an answer
+    about this file, while everything below is an inference about a name. The
+    fallback that matches a hint by title equality is deliberately kept for
+    files with no answer of their own, but it is a guess and this is not.
+    """
+    vid = video_id(link or "")
+    if vid:
+        return vid, "the link you gave"
     vid = facts.get("video_id")
     if vid:
         return vid, "cascade art track"
@@ -246,9 +271,9 @@ def measure(path):
 
 def fetch_one(task):
     """Download stage only. Network-bound, safe in threads."""
-    row, an, facts, hints, cookies = task
+    row, an, facts, hints, cookies, link = task
     src = row["path"]
-    vid, how = find_source(row, facts, hints)
+    vid, how = find_source(row, facts, hints, link)
     if not vid:
         return {"path": src, "file": row["file"], "status": "no source",
                 "why": how}
@@ -359,6 +384,10 @@ def main():
                     help="fetch the rows whose source file is gone, back to "
                          "the path it was at, instead of the rows that "
                          "measure badly")
+    ap.add_argument("--requested", action="store_true",
+                    help="fetch the rows you asked for by writing "
+                         "'redownload' in a review sheet, whatever they "
+                         "measure")
     args = ap.parse_args()
 
     rows = {r["path"]: r for r in json.load(open(REVIEW))}
@@ -368,8 +397,31 @@ def main():
     hints = json.load(open(YT_HINTS)) if os.path.exists(YT_HINTS) else {}
     done = json.load(open(REPORT)) if os.path.exists(REPORT) else {}
 
+    # Every answer you have given about a file, so a request can be honoured
+    # and so the exact link you gave for it beats a search.
+    from pipeline.review import load_hints, load_links, parse_hint
+    links = dict(load_links())
+    asked_for, all_hints = set(), load_hints()
+    for name, hint in all_hints.items():
+        kind, _payload = parse_hint(hint)
+        if kind == "refetch":
+            asked_for.add(name)
+        elif kind == "url":
+            links.setdefault(name, hint)
+
     todo = []
-    if args.missing:
+    if args.requested:
+        # No bandwidth bar. You listened to it, which is a better measurement
+        # of "this sounds wrong" than a spectral cutoff, and a file can be a
+        # bad rip at any bitrate.
+        for path, row in rows.items():
+            if row.get("file") not in asked_for:
+                continue
+            if f"requested:{path}" in done:
+                continue
+            todo.append((path, row, analysis.get(path) or {}))
+        todo.sort(key=lambda x: x[0])
+    elif args.missing:
         # A deleted source keeps erroring in write_tags on every run, and
         # those errors self-disable --prune, so stale output can never be
         # cleaned automatically until the file is back.
@@ -408,12 +460,14 @@ def main():
     args.common_root = common_root(list(analysis))
 
     if not todo:
-        left = ("no source file is missing" if args.missing
+        left = ("nothing left that you asked for" if args.requested
+                else "no source file is missing" if args.missing
                 else f"nothing below {args.min_cutoff:.0f}Hz left")
         print(f"  {left} ({len(done)} done)\n")
         return 0
 
-    what = ("source files are missing" if args.missing
+    what = ("files you asked to be fetched again" if args.requested
+            else "source files are missing" if args.missing
             else f"files measure below {args.min_cutoff:.0f}Hz")
     print(f"\n  {len(todo)} {what} ({len(done)} already attempted)")
     if args.dry_run:
@@ -455,7 +509,8 @@ def main():
             futs = {ex.submit(fetch_one, (row,
                                           analysis.get(p, {}),
                                           (cascade.get(p) or {}).get("facts") or {},
-                                          hints, args.cookies)): p
+                                          hints, args.cookies,
+                                          links.get(row["file"]))): p
                     for p, row, _a in batch}
             for f in as_completed(futs):
                 p = futs[f]
