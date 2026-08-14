@@ -627,12 +627,27 @@ def run_track(seed, ctx, max_rounds):
     for _ in range(max_rounds):
         changed = False
         for res in RESOLVERS:
-            if (res.name, tuple(sorted(fx.f))) in fired:
+            # What a resolver answers is a function of what it was asked, so
+            # the question is its inputs, not the whole fact set.
+            #
+            # Keyed on every fact, a resolver became eligible again every time
+            # anything at all changed, and re-asked the same endpoint the same
+            # question. It kept doing so while any single one of its outputs
+            # was still missing, which for an output the source does not carry
+            # is for ever: Deezer publishes a tempo for about a third of
+            # tracks, so `bpm_deezer` stays missing on the other two thirds and
+            # `deezer-track` was re-asked on every round until the cap.
+            #
+            # Measured over 60 tracks: 251 resolver calls of which 88 produced
+            # nothing, and `deezer-track` alone was asked 87 times for 60
+            # tracks.
+            key = (res.name, tuple(str(fx.get(k)) for k in res.needs))
+            if key in fired:
                 continue
             if not res.ready(fx):
                 continue
             before = dict(fx.f)
-            fired.append((res.name, tuple(sorted(fx.f))))
+            fired.append(key)
             fx.resolver = res.name
             try:
                 res.fn(fx, ctx)
