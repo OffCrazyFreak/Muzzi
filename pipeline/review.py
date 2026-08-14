@@ -467,6 +467,43 @@ def _rows_from(queue_path, rows):
     return out
 
 
+def _flat(value):
+    """-> a cell of links written out as text, for the .tsv fallback."""
+    if isinstance(value, list):
+        return "; ".join(f"{label}: {url}" for label, url in value)
+    return value
+
+
+def _write_cell(cell, value):
+    """Fill one spreadsheet cell, turning links into links.
+
+    A cell may be a list of (label, url) pairs. Each becomes a real hyperlink
+    with the label as its text, so the dossier column reads as a row of names
+    to click rather than four hundred characters of URL. Anything else is
+    written as before, except that a bare http token inside it is linkified
+    too: sheet 1 and the yt_links sheet have always held URLs as plain text,
+    and clicking one meant copying it out by hand.
+    """
+    from odf.text import A, P
+    p = P()
+    if isinstance(value, list):
+        for n, (label, url) in enumerate(value):
+            if n:
+                p.addText("  |  ")
+            p.addElement(A(href=url, text=label))
+        cell.addElement(p)
+        return
+    parts = str(value).split(" ")
+    for n, word in enumerate(parts):
+        if n:
+            p.addText(" ")
+        if word.startswith(("http://", "https://")):
+            p.addElement(A(href=word, text=word))
+        else:
+            p.addText(word)
+    cell.addElement(p)
+
+
 def _ods(path, title, note, items, with_proposal=True, cols=None, cells=None):
     """Write one spreadsheet. Falls back to .tsv if odfpy is missing.
 
@@ -477,7 +514,7 @@ def _ods(path, title, note, items, with_proposal=True, cols=None, cells=None):
     if cols is None:
         cols = ["rank", "confidence", "tier", "file", "proposed_artist",
                 "proposed_title", "proposed_album", "proposed_year", "why",
-                "audio_flags", "hint"]
+                "checked", "look here", "audio_flags", "hint"]
 
     if cells is None:
         def cells(r, i):
@@ -486,18 +523,19 @@ def _ods(path, title, note, items, with_proposal=True, cols=None, cells=None):
                     (r["proposed_title"] or "") if with_proposal else "",
                     (r["proposed_album"] or "") if with_proposal else "",
                     (r["proposed_year"] or "") if with_proposal else "",
-                    "; ".join(r["reasons"]), "; ".join(r["flags"]), r["hint"]]
+                    "; ".join(r["reasons"]), r.get("checked", ""),
+                    r.get("links") or "",
+                    "; ".join(r["flags"]), r["hint"]]
     try:
         from odf.opendocument import OpenDocumentSpreadsheet
         from odf.table import Table, TableRow, TableCell
-        from odf.text import P
     except ImportError:
         with open(os.path.splitext(path)[0] + ".tsv", "w",
                   encoding="utf-8", newline="") as fh:
             w = csv.writer(fh, delimiter="\t")
             w.writerow(cols)
             for i, r in enumerate(items, 1):
-                w.writerow(cells(r, i))
+                w.writerow([_flat(v) for v in cells(r, i)])
         return
 
     doc = OpenDocumentSpreadsheet()
@@ -512,7 +550,7 @@ def _ods(path, title, note, items, with_proposal=True, cols=None, cells=None):
                 c = TableCell(valuetype="float", value=float(v))
             else:
                 c = TableCell(valuetype="string")
-            c.addElement(P(text=str(v)))
+            _write_cell(c, v)
             tr.addElement(c)
         tbl.addElement(tr)
 
@@ -547,6 +585,55 @@ def links_from_sheets():
     return {k: v for k, v in out.items() if v}
 
 
+def _search_terms(row):
+    """-> (artist, title) to search catalogues for, falling back to the name.
+
+    A row on sheet 1 has no proposed identity by definition, and those are the
+    rows where a search link is worth most. The filename is what a person would
+    paste in themselves, minus the extension and the leading track number.
+    """
+    if row.get("proposed_artist") or row.get("proposed_title"):
+        return row.get("proposed_artist"), row.get("proposed_title")
+    stem = os.path.splitext(row.get("file") or "")[0]
+    return None, re.sub(r"^\s*\d{1,3}\s*[-.]\s*", "", stem).strip()
+
+
+def attach_dossier(rows, db=None):
+    """Add `checked` and `links` to every row that a person will be shown.
+
+    Two columns answering the two questions a reviewer actually has: what has
+    already been asked, and where do I go to settle it. Both are read out of
+    the evidence store, so neither costs a request and neither can invent
+    anything: a link is built from an identifier a source returned, and the
+    `checked` sentence names the families that answered.
+
+    Silent on failure. The store is a record of what happened, and a review
+    sheet that cannot be written because the record was unreadable is a worse
+    outcome than a sheet with two empty columns.
+    """
+    from pipeline import links
+    try:
+        conn = evidence.connect(db or evidence.DB, readonly=True)
+    except Exception:
+        return rows
+    for r in rows:
+        path = r.get("path")
+        if not path:
+            continue
+        try:
+            artist, title = _search_terms(r)
+            r["checked"] = confidence.why_review(conn, path)
+            # Every site, not only the ones that were asked. Offering the
+            # asked-only subset was the first shape of this and it read
+            # backwards: a row is in review precisely because what was asked
+            # did not settle it, so the sites worth naming are the ones nobody
+            # has tried. Which ones were asked is the `checked` column's job.
+            r["links"] = links.dossier(conn, path, artist, title, links.SEARCH)
+        except Exception:
+            continue
+    return rows
+
+
 def publish_sheets(groups, hints):
     """Rebuild the review folder from scratch, numbered in working order."""
     # Before the wipe, or the answer goes with the sheet.
@@ -572,6 +659,7 @@ def publish_sheets(groups, hints):
         items = [r for r in groups.get(key) or [] if r["tier"] != "auto"]
         if not items:
             continue
+        attach_dossier(items)
         path = os.path.join(REVIEW_DIR, f"{label}.ods")
         _ods(path, label, note, items, with_proposal=(key != "unknown"))
         made.append((label, len(items)))

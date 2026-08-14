@@ -340,6 +340,19 @@ hint column means the artist and title are right, which is a different
 question. Those answers are kept in a `link` column in `hints.tsv`, alongside
 the hints, and survive the sheets being rebuilt.
 
+Every sheet carries two columns you do not fill in, both read out of the
+evidence store:
+
+- **`checked`** says what was already asked and what it said, counted in
+  independence families rather than in sources: `artist: human agree;
+  musicbrainz disagree`. Cover Art Archive agreeing with MusicBrainz is
+  MusicBrainz agreeing with itself, so it is one voice, not two.
+- **`look here`** is a row of clickable links. The first ones open the exact
+  record a source returned, built from the identifier it gave: the Deezer
+  track, the MusicBrainz recording, every recording filed under that ISRC.
+  The rest are searches on each catalogue, for when the answer is not in any
+  of them yet.
+
 **Your answers are kept in `hints.tsv`, not in the sheets.** Delete a sheet
 whenever you like; the answers in it are already remembered, and an answer
 given on a file you later delete as a duplicate moves onto the copy that
@@ -1043,6 +1056,11 @@ question, never collapsed:
 ./.venv/bin/python tools/explain.py "Colonia - Najbolje"
 ./.venv/bin/python tools/explain.py "Elitni Odredi" --field artist
 ```
+
+`explain.py` finishes with the records the track resolved to, as URLs you can
+open. They are built from the identifiers the sources returned, so they name
+the exact track, album, recording and ISRC that answered, and the review sheets
+link to the same ones.
 
 `cascade` fills it as it runs, and it records the answers that **lost** as well
 as the ones that won. That is not bookkeeping: a refusal is the disagreement.
