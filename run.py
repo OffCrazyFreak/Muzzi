@@ -32,6 +32,7 @@ Usage:
   run.py MUSIC_DIR --skip verify_lyrics enrich
   run.py MUSIC_DIR --from webmatch    # resume partway through
   run.py MUSIC_DIR -j 8
+  run.py MUSIC_DIR --rounds 4     # repeat until a pass learns nothing
 """
 import argparse
 import os
@@ -93,6 +94,63 @@ def default_roots():
     return out
 
 
+# Stages that read the waveform. Nothing discovered downstream can change what
+# they measure, so a later round must not pay for them again. They are named
+# here rather than skipped by accident: a stage that belongs in this list and
+# is left out costs an hour a round, and one that does not belong here and is
+# added silently stops seeing new files.
+IMMUTABLE = ("fingerprint", "analyze", "silence")
+
+# What a round is judged to have learned. Counted rather than hashed, so the
+# report says how much moved rather than only that something did, and read
+# from the caches that hold facts rather than from the ones that hold
+# decisions: `review.json` is rebuilt every round by construction, so counting
+# it would make every round look productive.
+FACT_CACHES = ("cascade.json", "lyrics.json", "enrich.json", "webmatch.json",
+               "identity.json", "textsearch.json", "lyric_verify.json",
+               "lyric_align.json", "artist_canon.json", "yt_lookup.json")
+
+
+def without(phases, names):
+    """-> the plan with the named stages removed.
+
+    Handles both phase shapes, which is the whole reason it is a function: a
+    serial phase holds stages directly and a parallel one holds chains of
+    them, so an inline comprehension that assumes one silently leaves the
+    other untouched.
+    """
+    out = []
+    for kind, chains in phases:
+        if kind == "serial":
+            out.append((kind, [s for s in chains if s[0] not in names]))
+        else:
+            out.append((kind, [[s for s in c if s[0] not in names]
+                               for c in chains]))
+    return out
+
+
+def cache_state():
+    """-> {cache name: number of entries}, for the caches that hold facts.
+
+    Entry counts, not modification times: a stage that rewrites its cache
+    without changing anything has not learned anything, and a round that
+    stopped on mtime would never stop.
+    """
+    import json as _json
+    out = {}
+    for name in FACT_CACHES:
+        p = os.path.join(HERE, "cache", name)
+        if not os.path.exists(p):
+            continue
+        try:
+            with open(p, encoding="utf-8") as fh:
+                data = _json.load(fh)
+        except (OSError, ValueError):
+            continue
+        out[name] = len(data)
+    return out
+
+
 def run_stage(name, cmd, results, quiet=False):
     env = dict(os.environ, PATH=f"{BIN}:{os.environ.get('PATH','')}")
     t0 = time.time()
@@ -120,6 +178,12 @@ def main():
     ap.add_argument("--from", dest="start_at", metavar="STAGE",
                     help="skip everything before this stage")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--rounds", type=int, default=1, metavar="N",
+                    help="repeat the pass until one learns nothing, up to N "
+                         "times. Every fact is a better search key than the "
+                         "one that found it, and some only exist after the "
+                         "pass that would have used them. The waveform stages "
+                         "run once whatever this says")
     ap.add_argument("-j", "--workers", type=int)
     args = ap.parse_args()
 
@@ -265,24 +329,62 @@ def main():
                 return
         flags[label] = True
 
-    for kind, chains in phases:
-        if kind == "serial":
-            for name, cmd in keep(chains):
-                ok = run_stage(name, cmd, results)
-                # fingerprint is the one stage nothing can proceed without.
-                if not ok and name == "fingerprint":
-                    sys.exit("fingerprint failed; nothing downstream can run")
-        else:
-            flags, threads = {}, []
-            for i, c in enumerate(chains):
-                got = keep(c)
-                if got:
-                    threads.append(threading.Thread(
-                        target=run_chain, args=(got, flags, i)))
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
+    def one_pass(phases):
+        for kind, chains in phases:
+            if kind == "serial":
+                for name, cmd in keep(chains):
+                    ok = run_stage(name, cmd, results)
+                    # fingerprint is the one stage nothing can proceed without.
+                    if not ok and name == "fingerprint":
+                        sys.exit("fingerprint failed; nothing downstream "
+                                 "can run")
+            else:
+                flags, threads = {}, []
+                for i, c in enumerate(chains):
+                    got = keep(c)
+                    if got:
+                        threads.append(threading.Thread(
+                            target=run_chain, args=(got, flags, i)))
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+
+    one_pass(phases)
+
+    # Every fact learned is a better search key than the one that found it,
+    # and some of them only exist after the pass that would have used them:
+    # artist_names settles a canonical spelling AFTER the searches ran, and
+    # `Joško Čagalj Jole` searched as `Jole` is a different question.
+    #
+    # So the pass can be repeated until one of them learns nothing. Repeating
+    # is cheap because every stage is cache-backed: a round with nothing to do
+    # is a round of stages each saying so.
+    #
+    # Off by default, and worth being honest about why. Measured on this
+    # library, a second round gains nothing: only 27 artists have a canonical
+    # spelling that differs from the one searched with, only 4 of their tracks
+    # are still missing anything the cascade supplies, and re-asking with the
+    # better name found nothing new for any of them. That is what a library
+    # already enriched over many runs looks like. It is for the next import,
+    # where most tracks are unresolved and the feedback has somewhere to go.
+    for extra in range(2, max(args.rounds, 1) + 1):
+        before = cache_state()
+        print(f"\n  ROUND {extra}: repeating until a pass learns nothing\n")
+        # fingerprint and analyze read the waveform, so nothing discovered
+        # downstream can change their answer and re-running them is pure cost.
+        one_pass(without(phases, IMMUTABLE))
+        after = cache_state()
+        gained = {k: after[k] - before.get(k, 0) for k in after
+                  if after[k] != before.get(k, 0)}
+        if not gained:
+            print(f"\n  round {extra} learned nothing. Stopping.\n")
+            break
+        print(f"\n  round {extra} changed: {gained}\n")
+    else:
+        if args.rounds > 1:
+            print(f"\n  stopped at the {args.rounds}-round cap while still "
+                  f"learning. Raise --rounds to keep going.\n")
 
     total = time.time() - t0
     serial = sum(v["secs"] for v in results.values())
