@@ -346,6 +346,13 @@ The YouTube sheet's answers go in its own **`link`** column, not `hint`: a bare
 different question. Those answers are kept in a `link` column in `hints.tsv`,
 alongside the hints, and survive the sheets being rebuilt.
 
+Three answers are understood there: a **URL**, which is used as given; **`n`**,
+which stops the file being proposed again; and **`y`**, which means the link
+already proposed is the right one. What the sheet proposed is recorded in
+`cache/yt_proposed.json` at the moment it asks, because the sheet itself is
+rebuilt from scratch every run: without that record a `y` would be an answer to
+a question nothing had kept, which is exactly what it was until this was fixed.
+
 The trim sheet's answers go in `hint`, as `trim=y` to cut or `trim=n` to keep
 the file at full length. A `trim=n` pins both ends; a `trim=y` releases a cut
 the pipeline declined to make on its own, including one a lyric sheet objected

@@ -87,6 +87,9 @@ HINTS = os.path.join(HERE, "hints.tsv")
 REVIEW_DIR = os.path.join(HERE, "review")
 LOOKUP = os.path.join(HERE, "cache", "yt_lookup.json")
 OUT = os.path.join(HERE, "cache", "youtube_links.json")
+# What the sheet last offered, per file. The answer "y" means nothing without
+# it, because the sheet that asked has been rebuilt by the time it is read.
+PROPOSED = os.path.join(HERE, "cache", "yt_proposed.json")
 
 SHEET = "4 - confirm the youtube link"
 SHEET_NOTE = ("A YouTube link was found for these, but not confidently enough "
@@ -299,18 +302,51 @@ def yt_search(artist, title, limiter, cache):
 
 
 REFUSALS = {"n", "no", "none", "-"}
+# "the link you proposed is the right one". The other half of REFUSALS, and it
+# had no half: a `y` was written into hints.tsv and then read by nothing at
+# all, because `video_id("y")` is None and only refusals were checked by name.
+# Measured on this library, 29 answers said yes and 29 did nothing.
+AFFIRMATIONS = {"y", "yes"}
 
 
-def decide(path, cands, row, secs, refused=False):
+def proposal_for(cands):
+    """-> the candidate the review sheet shows, or None.
+
+    One definition, used both to write the sheet and to resolve a `y` against
+    it. Two copies of this rule would let the answer confirm a different video
+    than the question offered.
+    """
+    if not cands:
+        return None
+    return sorted(cands, key=lambda c: c["tier"] != "exact")[0]
+
+
+def decide(path, cands, row, secs, refused=False, confirmed=None):
     """-> (record, reason) for what to write, or (None, reason) to review it.
 
-    Origin wins outright and is never gated. Otherwise two independent sources
-    naming one video is enough; a lone exact source is enough; a lone search
-    result has to prove itself on duration and version markers.
+    A video you confirmed wins outright, then origin, and neither is gated.
+    Otherwise two independent sources naming one video is enough; a lone exact
+    source is enough; a lone search result has to prove itself on duration and
+    version markers.
     """
-    if not cands or refused:
+    if refused:
         # "n" in the sheet is an answer, not a blank: stop proposing this one
         # and stop asking about it.
+        return None, None
+    if confirmed:
+        # You looked at the video and said it was right. Nothing measured here
+        # outranks that, which is the same standing a pasted link already has.
+        #
+        # Judged before the candidate list is checked, not after. A confirmed
+        # id can come from the recorded proposal alone, and that is exactly the
+        # case where the candidates have since lapsed: gating it on candidates
+        # would drop the answer in the one situation the recorded proposal
+        # exists to survive.
+        src = next((c["source"] for c in cands or []
+                    if c["video_id"] == confirmed), "your answer")
+        return {"video_id": confirmed, "trust": "origin",
+                "from": "you confirmed it", "sources": [src]}, None
+    if not cands:
         return None, None
     origin = [c for c in cands if c["tier"] == "origin"]
     if origin:
@@ -366,8 +402,21 @@ def decide(path, cands, row, secs, refused=False):
 
 
 def publish_sheet(items):
-    """Write the review sheet for links that could not be settled."""
+    """Write the review sheet for links that could not be settled.
+
+    The proposals go to a cache of their own at the same time. A `y` answers a
+    question, and the question was "is this video the right one" about one
+    specific video; the sheet is rebuilt from scratch every run, so without
+    this the video is gone by the time the answer is read and the `y` points at
+    nothing. That is exactly what happened to 29 answers here.
+    """
     os.makedirs(REVIEW_DIR, exist_ok=True)
+    proposed = {r["file"]: r["proposed_link"] for r in items
+                if r.get("file") and r.get("proposed_link")}
+    if proposed:
+        json.dump(proposed, open(PROPOSED + ".tmp", "w"),
+                  ensure_ascii=False, indent=1)
+        os.replace(PROPOSED + ".tmp", PROPOSED)
     path = os.path.join(REVIEW_DIR, SHEET + ".ods")
     cols = ["rank", "file", "artist", "title", "proposed_link", "why", "link"]
 
@@ -399,6 +448,15 @@ def main():
 
     answers = link_hints()
     refused = {f for f, v in answers.items() if v.strip().lower() in REFUSALS}
+    affirmed = {f for f, v in answers.items()
+                if v.strip().lower() in AFFIRMATIONS}
+    # What the sheet offered when it asked. Answers given before this cache
+    # existed have no record of the question, so those fall back to re-deriving
+    # the proposal from the same caches by the same rule. It is the same video
+    # unless a later run found a better candidate, and the count is printed
+    # rather than buried, because a re-derived confirmation is weaker evidence
+    # than one checked against the question that was actually asked.
+    was_offered = _load(PROPOSED, {})
     cand = candidates_from_caches(
         rows, _load(TAGSEED, {}), _load(HINT_YT, {}), _load(WEBMATCH, {}),
         _load(REDOWNLOAD, {}), answers)
@@ -451,11 +509,23 @@ def main():
                 os.replace(LOOKUP + ".tmp", LOOKUP)
 
     out, sheet, stats, why = {}, [], Counter(), Counter()
+    confirmed_from = Counter()
     for r in rows:
         path = r["path"]
         secs = (analysis.get(path) or {}).get("decoded_secs")
-        rec, reason = decide(path, cand.get(path) or [], r, secs,
-                             refused=r["file"] in refused)
+        cands = cand.get(path) or []
+        yes = None
+        if r["file"] in affirmed:
+            yes = video_id(was_offered.get(r["file"]) or "")
+            if yes:
+                confirmed_from["against the link you were shown"] += 1
+            else:
+                best = proposal_for(cands)
+                yes = best["video_id"] if best else None
+                confirmed_from["re-derived, the sheet was already rebuilt"
+                               if yes else "no candidate left to confirm"] += 1
+        rec, reason = decide(path, cands, r, secs,
+                             refused=r["file"] in refused, confirmed=yes)
         if rec:
             rec.update({"url": WATCH.format(rec["video_id"]),
                         "inherited_from": inherited.get(path),
@@ -464,8 +534,7 @@ def main():
             stats[rec["trust"]] += 1
             why[rec["from"]] += 1
         elif reason:
-            best = sorted((cand.get(path) or []),
-                          key=lambda c: c["tier"] != "exact")[0]
+            best = proposal_for(cands)
             sheet.append({"file": r["file"], "artist": r.get("proposed_artist"),
                           "title": r.get("proposed_title"),
                           "proposed_link": WATCH.format(best["video_id"]),
@@ -478,6 +547,11 @@ def main():
     print()
     for src, n in why.most_common():
         print(f"    {src[:34]:34} {n:5}")
+    if confirmed_from:
+        print(f"\n    {sum(confirmed_from.values())} of your 'y' answers "
+              f"applied:")
+        for how, n in confirmed_from.most_common():
+            print(f"      {how[:44]:44} {n:5}")
 
     if not args.apply:
         json.dump(lookup, open(LOOKUP + ".tmp", "w"),
