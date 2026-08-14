@@ -100,6 +100,12 @@ def extract(path):
             fr = t.getall(frame)
             return str(fr[0].text[0]) if fr and getattr(fr[0], "text", None) else None
         artist, title = first("TPE1"), first("TIT2")
+        # The band frame, which on this library is where the artist actually
+        # is. Measured over all 1723 files: TPE1 on 92, TPE2 on 1039, both on
+        # 8. Read separately and never merged into `artist`, because it is
+        # usually a worse spelling of the same name and occasionally a better
+        # one, and only a person can tell which. See local_observations.
+        band = first("TPE2")
         comment = " ".join(str(c.text[0]) for c in t.getall("COMM")
                            if getattr(c, "text", None))
         desc = " ".join(str(fr.text[0]) for fr in t.getall("TXXX")
@@ -107,10 +113,15 @@ def extract(path):
     else:                                          # MP4 / Vorbis
         artist = _text(t, "\xa9ART", "artist")
         title = _text(t, "\xa9nam", "title")
+        # The MP4 spelling of the same idea. Not present on any file here, and
+        # read anyway: the MP4 path has silently carried fewer fields than the
+        # MP3 path before, and a container this library is a quarter made of
+        # should not depend on today's contents to keep working.
+        band = _text(t, "aART", "albumartist")
         comment = _text(t, "\xa9cmt", "comment") or ""
         desc = _text(t, "----:com.apple.iTunes:DESCRIPTION", "description") or ""
 
-    if not (artist or title):
+    if not (artist or title or band):
         return None
 
     # Uploads titled "02. Artist - Track" leave the position glued to the
@@ -118,7 +129,13 @@ def extract(path):
     artist = _TRACKNO.sub("", artist) if artist else artist
     title = _TRACKNO.sub("", title) if title else title
 
+    band = _TRACKNO.sub("", band) if band else band
     out = {"tag_artist": artist, "title": title}
+    # Additive, and only when there is one. Nothing that already read this
+    # cache looks for the key, no existing value moves, and `seed_for` does
+    # not consult it, so a file's identity cannot change because of this.
+    if band:
+        out["tag_band"] = band
     m = _YT_ID.search(comment or "")
     if m:
         out["youtube_id"] = m.group(1)

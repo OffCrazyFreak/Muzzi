@@ -131,6 +131,7 @@ FAMILY = {
     "filename": "local",
     "tags": "local",
     "folder": "local",
+    "band": "local",
     "human": "human",
 }
 
@@ -467,10 +468,10 @@ def local_observations(conn, paths, seeds, now=None):
     so these observations raise no penalty and cast no vote; they are what the
     review sheet reads to show you the disagreement rather than average it out.
 
-    -> {"tags": n, "filename": n, "folder": n} observations written.
+    -> {"tags": n, "band": n, "filename": n, "folder": n} written.
     """
     from pipeline.probe_match import split_name
-    counts = {"tags": 0, "filename": 0, "folder": 0}
+    counts = {"tags": 0, "band": 0, "filename": 0, "folder": 0}
     for path in paths:
         # Everything this file said last time, cleared before it says it
         # again. `query_key` carries the value for these sources, which is
@@ -520,6 +521,27 @@ def local_observations(conn, paths, seeds, now=None):
                     record(conn, path, field, "tags", qk, FOUND, value=value,
                            now=now)
                     counts["tags"] += 1
+
+        # The band frame, kept apart from the artist frame rather than filling
+        # in for it. Measured over the library: TPE1 carries an artist on 92
+        # files and TPE2 on 1039, so for 1031 files this is the only artist
+        # the file itself states and nothing has ever read it.
+        #
+        # Its own source, not a second `tags` observation, because the two
+        # disagree about 263 names and the disagreement is the useful part.
+        # Almost all of it is the same mojibake the titles have ("Oliver
+        # Dragojeviæ", "Duko Lokin"), which is why this does not feed the seed:
+        # the ć survives as æ and can be undone, but the š and ž were dropped
+        # outright and no transformation brings them back, so the filename is
+        # genuinely the better name. Almost, though, is not all. "PSY" sits in
+        # TPE2 of a file the filename calls "Gangam Style", where the tag is
+        # right and the filename put the title in the artist's place. That row
+        # is worth a person seeing, and until now nothing could show it.
+        band = s.get("tag_band")
+        if band:
+            record(conn, path, "artist", "band", f"band:{band}", FOUND,
+                   value=band, now=now)
+            counts["band"] += 1
 
         # The folder, as the collection it is and not as identity. Measured
         # before writing this: all 1723 files here sit exactly one level below
