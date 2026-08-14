@@ -62,6 +62,16 @@ SHEETS = [
      "checked. Fixable rows come first, the rest are recorded so the counts "
      "add up. In `hint` type trim=n to keep a file at full length, or trim=y "
      "to cut the silence anyway. Leave it blank to change nothing."),
+    ("5 - shared intros", "intro",
+     "These files open with the same recording as other files, which is often "
+     "a label bumper before the song and sometimes just a shared intro beat: "
+     "eight NCS tracks here share up to 8.5s of opening and none of them has "
+     "a bumper. So nothing is cut until you say so. Play the first few "
+     "seconds, then in `hint` type intro=y to cut that file's opening or "
+     "intro=n to keep it. Answering one file of a group settles only that "
+     "file, because some songs by the same artists carry the bumper and some "
+     "do not. Each row carries its own measured length, since the same bumper "
+     "runs 8.4s on one file and 3.0s on another."),
 ]
 OUT = os.path.join(HERE, "cache", "review.json")
 DUPES = os.path.join(HERE, "cache", "duplicates.json")
@@ -72,6 +82,7 @@ SILENCE = os.path.join(HERE, "cache", "silence.json")
 ALIGN = os.path.join(HERE, "cache", "lyric_align.json")
 LYRICS = os.path.join(HERE, "cache", "lyrics.json")
 LYRIC_VERIFY = os.path.join(HERE, "cache", "lyric_verify.json")
+INTROS = os.path.join(HERE, "cache", "intros.json")
 
 
 def _load(path):
@@ -317,7 +328,50 @@ def sheet_groups(rows):
     return {"unknown": sorted(needs_link, key=key),
             "confirm": sorted(confirm, key=key),
             "verify": sorted(rest, key=key),
-            "trim": timing_rows(rows)}
+            "trim": timing_rows(rows),
+            "intro": intro_rows(rows)}
+
+
+def intro_rows(rows):
+    """-> a row per file that opens with the same recording as other files.
+
+    Built from ALL rows, like the timing sheet and for the same reason: an
+    intro is a property of the audio, and a track can be identified with total
+    confidence and still open with a label bumper.
+
+    Grouped, biggest group first, and within a group the longest opening
+    first, so the clearest example of each is the row you meet. A file you have
+    already ruled on is dropped, because the answer is in hints.tsv and asking
+    again is asking you to listen twice.
+
+    Empty until intros.py has run, which is what keeps this sheet from
+    appearing before anything has been measured.
+    """
+    found = _load(INTROS).get("clusters") or []
+    if not found:
+        return []
+    answered = {name for name, hint in load_hints().items()
+                if parse_hint(hint)[0] == "intro"}
+    by_path = {r["path"]: r for r in rows if r.get("path")}
+    out = []
+    for n, cluster in enumerate(found, 1):
+        members = [f for f in cluster["files"] if f["file"] not in answered]
+        if not members:
+            continue
+        others = len(cluster["files"]) - 1
+        for f in members:
+            r = by_path.get(f["path"])
+            if not r:
+                continue
+            row = dict(r)
+            row["reasons"] = [
+                f"opens with the same {f['shared_secs']:.1f}s as {others} "
+                f"other file{'s' if others != 1 else ''} (group {n}); "
+                f"intro=y cuts it, intro=n keeps it"]
+            row["intro_group"] = n
+            row["intro_secs"] = f["shared_secs"]
+            out.append(row)
+    return out
 
 
 # A trim this small is not worth anyone's attention even when its lyric
@@ -790,6 +844,7 @@ _REFETCH = {"redownload", "redl", "refetch", "download again", "ponovo"}
 _URL = re.compile(r"https?://\S+", re.I)
 # "trim=n", "trim: no", "trim y". Answers sheet 4 and nothing else.
 _TRIM_HINT = re.compile(r"^trim\s*[=:]?\s*(\S+)\s*$", re.I)
+_INTRO_HINT = re.compile(r"^intro\s*[=:]?\s*(\S+)\s*$", re.I)
 _VIDEO_ID = re.compile(r"(?:v=|youtu\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})")
 
 
@@ -837,6 +892,15 @@ def parse_hint(hint):
     m = _TRIM_HINT.match(h)
     if m and m.group(1).lower() in _YES | _NO:
         return "trim", m.group(1).lower() in _YES
+
+    # A recorded intro before the song. Its own answer rather than reusing
+    # "trim": they are different questions about different things, and someone
+    # who answered one has not answered the other. trim is about silence this
+    # pipeline measured; intro is about a recording only a person can
+    # recognise, which is why nothing is cut without this.
+    m = _INTRO_HINT.match(h)
+    if m and m.group(1).lower() in _YES | _NO:
+        return "intro", m.group(1).lower() in _YES
 
     # "artist: X; title: Y" is as natural to type as "artist=X", and a hint
     # that is ignored because of the separator is worse than no hint at all.

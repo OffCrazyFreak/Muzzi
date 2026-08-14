@@ -281,6 +281,7 @@ can't be wrong about which file it's describing:
 |---|---|
 | `analyze` | BPM (three engines), musical key -> Camelot, loudness and true peak (ffmpeg EBU R128), danceability, spectral cutoff |
 | `dedupe` | files whose fingerprints match: the same recording twice |
+| `intros` | which files open with the same recording as other files, and for how long. Proposes only: nothing is cut without an answer, because eight NCS tracks share an opening beat and none of them is a bumper |
 | `silence` | how much dead air each file opens and ends with, and whether either is safe to cut. Measures the *source*, so the figures never change and trimming can never happen twice |
 | `verify_lyrics` | Whisper transcribes the audio and compares it to the fetched lyrics -- independent proof the file is the song we think, plus language detection. Each score records a digest of the sheet it judged, so a track whose lyrics later change is re-scored and one whose lyrics did not is still skipped |
 | `lyric_align` | how far each synced lyric sheet is out of step with its audio, by locating the opening lines in a word-timestamped transcript |
@@ -335,9 +336,10 @@ there is nothing left to answer.
 | `2 - confirm the name.ods` | a name was proposed but the filename disagrees | `y` or `n` |
 | `3 - check the rest.ods` | everything else, least confident first | anything |
 | `4 - trim and lyric timing.ods` | timing, not identity: a long quiet opening, a lyric sheet timed for another edit, or a tail cut a sheet contradicts | `trim=y` or `trim=n` |
-| `5 - confirm the youtube link.ods` | a video was found but not confidently enough to write it | a URL, `y`, or `n` |
+| `5 - shared intros.ods` | the file opens with the same recording as other files, often a label bumper | `intro=y` or `intro=n` |
+| `6 - confirm the youtube link.ods` | a video was found but not confidently enough to write it | a URL, `y`, or `n` |
 
-Sheets 1 to 4 are written by `review`, sheet 5 by `yt_links`, and its number is
+Sheets 1 to 5 are written by `review`, the last by `yt_links`, and its number is
 derived from how many the first stage writes rather than spelled out, so adding
 one there cannot put two sheets under the same number again.
 
