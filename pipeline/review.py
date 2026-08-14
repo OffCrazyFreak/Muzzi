@@ -413,7 +413,8 @@ def timing_rows(rows):
         tail = silence.tail_cut_for(s)
         if tail:
             ok, tail_why = confidence.tail_conflict(
-                entry, secs.get(p), tail, verified.get(p), art, tit)
+                entry, secs.get(p), tail, verified.get(p), art, tit,
+                silence.cut_for(s))
             if not ok:
                 why.append(f"{tail_why}, so the {tail:.1f}s was left alone; "
                            f"trim=y cuts it anyway, trim=n keeps it for good")

@@ -144,27 +144,34 @@ def leading_silence(path, threshold_db):
 def trailing_silence(path, threshold_db, duration=None):
     """-> seconds of silence at the very end, 0.0 when the file ends loud.
 
-    Measured by decoding the last stretch, reversing it with `areverse` and
-    reading the run that then opens at 0. Same filter, same thresholds, same
-    code path as the head, so the two numbers are directly comparable, which
-    they would not be if the tail were derived from `silence_start` markers
-    against a duration read from somewhere else.
+    Two passes, and they use different methods on purpose.
 
-    The scan window is the one hazard. ffmpeg emits a `silence_end` at the
-    segment boundary whether or not the silence really ended there, so a file
-    whose dead air is longer than the window reads as exactly one window's
-    worth. Measured on the library, that clipped 5 files. When the run reaches
-    the edge, the whole file is rescanned rather than trusted.
+    The fast one decodes only the last `SCAN_SECS`, reverses it with `areverse`
+    and reads the run that then opens at 0. Same filter, same thresholds and
+    the same shape as the head, so the two numbers are directly comparable,
+    which they would not be if the tail were derived from `silence_start`
+    markers against a duration read from somewhere else.
+
+    The scan window is the hazard. ffmpeg emits a `silence_end` at the segment
+    boundary whether or not the silence really ended there, so a file whose
+    dead air outlasts the window reads as exactly one window's worth. Measured:
+    without the second pass, four of the ten longest tails in this library
+    report 30s instead of their real 30 to 36, and each would be under-cut by
+    the difference.
+
+    The second pass scans the whole file forwards instead of reversing it.
+    `areverse` has to hold everything it is given in memory, so widening the
+    window is paid for in RAM, once per worker: a bounded 30s reversal is about
+    10MB, and reversing a whole DJ set across eight threads is not. Forward
+    `silencedetect` streams, so the fallback costs time and nothing else. It
+    reaches the same answer by a different route, which is worth something on
+    its own: this is the method that independently confirmed the fast path on
+    all ten of the longest tails.
     """
-    def scan(window):
-        args = ["-i", path, "-af",
-                f"areverse,silencedetect=noise={threshold_db:.1f}dB:"
-                f"d={MIN_SILENCE}"]
-        if window:
-            # Seek before the input so only the tail is decoded. Without a
-            # duration there is nothing to seek to, and the whole file is read.
-            args = ["-sseof", f"-{window}"] + args
-        err = _ffmpeg(args, timeout=300)
+    def reversed_tail(window):
+        err = _ffmpeg(["-sseof", f"-{window}", "-i", path, "-af",
+                       f"areverse,silencedetect=noise={threshold_db:.1f}dB:"
+                       f"d={MIN_SILENCE}"], timeout=300)
         if err is None:
             return None
         start = _SIL_START.search(err)
@@ -173,18 +180,33 @@ def trailing_silence(path, threshold_db, duration=None):
         end = _SIL_END.search(err)
         return float(end.group(1)) if end else None
 
-    window = SCAN_SECS if duration and duration > SCAN_SECS else None
-    got = scan(window)
-    # A run that reaches the edge of the window was cut off by the window, not
-    # by the music. ffmpeg closes it with a `silence_end` at the boundary
-    # regardless, so this cannot be told from a genuine ending and has to be
-    # rescanned whole. Measured: without this, four of the ten longest files in
-    # the library report exactly the window instead of their real 30 to 36
-    # seconds, and every one of them would then be under-cut by that much.
-    if window and (got is None or got >= window - EDGE_TOLERANCE):
-        got = scan(None)
-    if got is None:
-        return float(duration) if duration else None
+    def forward_tail():
+        """The last silent run that reaches the end of the file."""
+        err = _ffmpeg(["-i", path, "-af",
+                       f"silencedetect=noise={threshold_db:.1f}dB:"
+                       f"d={MIN_SILENCE}"], timeout=600)
+        if err is None or not duration:
+            return None
+        opened = None
+        for m in re.finditer(r"silence_(start|end):\s*(-?[\d.]+)", err):
+            if m.group(1) == "start":
+                opened = float(m.group(2))
+            elif opened is not None:
+                # A run that closed before the end is a pause in the music.
+                last, opened = (opened, float(m.group(2))), None
+                if abs(last[1] - duration) < EDGE_TOLERANCE:
+                    return max(0.0, duration - last[0])
+        # Still open when the file ended: silence all the way out.
+        return max(0.0, duration - opened) if opened is not None else 0.0
+
+    if not duration or duration <= SCAN_SECS:
+        got = reversed_tail(SCAN_SECS)
+        return got if got is not None else (duration or None)
+    got = reversed_tail(SCAN_SECS)
+    if got is None or got >= SCAN_SECS - EDGE_TOLERANCE:
+        whole = forward_tail()
+        if whole is not None:
+            return whole
     return got
 
 

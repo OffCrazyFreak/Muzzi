@@ -340,7 +340,7 @@ def lyric_timing(entry, decoded_secs=None, cut=0.0):
 # argument by destroying the evidence.
 
 def tail_conflict(entry, decoded_secs, tail_cut, verified=None,
-                  artist=None, title=None):
+                  artist=None, title=None, head_cut=0.0):
     """-> (safe, reason) for cutting `tail_cut` seconds off this file's end.
 
     Not "does the sheet look right", which `lyric_text` answers. This asks the
@@ -380,7 +380,11 @@ def tail_conflict(entry, decoded_secs, tail_cut, verified=None,
     # A sheet whose timings are refused contributes no timestamps to the
     # output at all: write_tags keeps its words and drops its numbers. There
     # is nothing left for the cut to contradict.
-    timing, _why = lyric_timing(entry, decoded_secs)
+    # With the same head cut write_tags judges it against. Asking a different
+    # question here than the one that decides the file's actual timings is how
+    # this ends up believing the numbers were dropped when they were kept, and
+    # cutting on the strength of it.
+    timing, _why = lyric_timing(entry, decoded_secs, head_cut)
     if timing is not None and timing < LYRIC_TIMING_BAR:
         return True, "timings already dropped"
     text, why = lyric_text(entry, verified, artist, title)

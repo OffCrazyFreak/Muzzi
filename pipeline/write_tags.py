@@ -1643,7 +1643,7 @@ def main():
         if tail_cut and (sil.get(src) or {}).get("hinted") is not True:
             safe, why = confidence.tail_conflict(
                 entry, a.get("decoded_secs"), tail_cut, v,
-                (ident or {}).get("artist"), (ident or {}).get("title"))
+                (ident or {}).get("artist"), (ident or {}).get("title"), cut)
             if not safe:
                 tail_cut = 0.0
                 stats["tail_blocked"] = stats.get("tail_blocked", 0) + 1
