@@ -1,0 +1,74 @@
+
+  493 files have a video id in the caches, 147 more inherit one from their duplicate
+  1110 files with no id yet, looking them up (MusicBrainz at 1/s, then YouTube Music)
+
+    25/1110  1088 files with a candidate
+    50/1110  1109 files with a candidate
+    75/1110  1131 files with a candidate
+    100/1110  1151 files with a candidate
+    125/1110  1175 files with a candidate
+    150/1110  1200 files with a candidate
+    175/1110  1222 files with a candidate
+    200/1110  1245 files with a candidate
+    225/1110  1267 files with a candidate
+    250/1110  1288 files with a candidate
+    275/1110  1310 files with a candidate
+    300/1110  1330 files with a candidate
+    325/1110  1354 files with a candidate
+    350/1110  1378 files with a candidate
+    375/1110  1402 files with a candidate
+    400/1110  1426 files with a candidate
+    425/1110  1448 files with a candidate
+    450/1110  1472 files with a candidate
+    475/1110  1496 files with a candidate
+    500/1110  1520 files with a candidate
+    525/1110  1543 files with a candidate
+    550/1110  1564 files with a candidate
+    575/1110  1588 files with a candidate
+    600/1110  1612 files with a candidate
+    625/1110  1635 files with a candidate
+    650/1110  1660 files with a candidate
+    675/1110  1683 files with a candidate
+    700/1110  1707 files with a candidate
+    725/1110  1729 files with a candidate
+    750/1110  1751 files with a candidate
+    775/1110  1774 files with a candidate
+    800/1110  1797 files with a candidate
+    825/1110  1820 files with a candidate
+    850/1110  1845 files with a candidate
+    875/1110  1869 files with a candidate
+    900/1110  1894 files with a candidate
+    925/1110  1919 files with a candidate
+    950/1110  1939 files with a candidate
+    975/1110  1961 files with a candidate
+    1000/1110  1986 files with a candidate
+    1025/1110  2009 files with a candidate
+    1050/1110  2032 files with a candidate
+    1075/1110  2055 files with a candidate
+    1100/1110  2076 files with a candidate
+    1110/1110  2086 files with a candidate
+
+  1559 files get a link, 75 need your eyes
+
+    origin         585
+    reference      974
+
+    ytmusic search                       871
+    redownloaded audio                   237
+    your link                            183
+    file comment                         136
+    ytmusic                               54
+    musicbrainz                           49
+    you confirmed it                      29
+
+    29 of your 'y' answers applied:
+      re-derived, the sheet was already rebuilt       29
+
+  49 link answers kept in /home/silver/Desktop/Muzzi/hints.tsv
+
+  -> /home/silver/Desktop/Muzzi/cache/youtube_links.json  (1559 links)
+  -> /home/silver/Desktop/Muzzi/review/6 - confirm the youtube link.ods  (75 rows)
+  write_tags.py will now put them in the files
+
+
+rc 0
