@@ -394,6 +394,62 @@ def tail_conflict(entry, decoded_secs, tail_cut, verified=None,
                    f"about to be cut from the end")
 
 
+def head_conflict(entry, decoded_secs, intro_cut, offset, verified=None,
+                  artist=None, title=None, head_cut=0.0):
+    """-> (safe, reason) for cutting `intro_cut` seconds off this file's front.
+
+    The head analogue of tail_conflict, and it turns on which timeline the
+    sheet is written against. Sheets come from LRCLIB and Deezer, timed to the
+    commercial master, which has no bumper: a rip carrying one lags its own
+    sheet by the length of the bumper, `lyric_align` measures exactly that lag
+    as `offset`, and removing the bumper is what puts the two back in step.
+    Every timestamp in such a sheet sits after the cut once it is placed, so
+    there is nothing to lose and nothing to ask.
+
+    The conflict is the other case: a sheet already in step with the rip
+    (offset near zero) that nevertheless has words inside the opening about to
+    be removed. Then either the sheet is timed for a different edit or the
+    opening is not a bumper at all, and neither is answerable from here.
+
+    An unmeasured offset is not a conflict. It is the ordinary state of a file
+    lyric_align could not check, the cut still has your answer behind it, and
+    refusing on the absence of a measurement would block most of the library
+    from a fix it asked for.
+    """
+    if intro_cut <= 0 or not isinstance(entry, dict):
+        return True, None
+    from pipeline import lrc
+    sung = lrc.lines(entry.get("synced") or "")
+    if not sung:
+        return True, None
+    first = sung[0][0]
+    if first >= intro_cut:
+        return True, None
+    # The sheet lags the audio by roughly the bumper, so it is written for the
+    # clean master and the cut is what aligns them. Half the cut is the bar
+    # because the run undershoots the boundary and the alignment is measured
+    # to within a beat; nothing here is precise to a tenth of a second.
+    #
+    # No measurement is not a conflict, and this is the branch that says so.
+    # Blocking on the absence of one would refuse the cut on every file
+    # lyric_align could not check, which is most of them, and refuse it in
+    # favour of nothing: there is no second measurement to prefer, only an
+    # answer given by ear and a sheet whose timeline is unknown.
+    if offset is None or offset >= intro_cut / 2:
+        return True, None
+    # Same two escapes as the tail, judged with the same head cut write_tags
+    # judges by: a sheet whose numbers or words are already refused
+    # contributes nothing the cut could contradict.
+    timing, _why = lyric_timing(entry, decoded_secs, head_cut)
+    if timing is not None and timing < LYRIC_TIMING_BAR:
+        return True, "timings already dropped"
+    text, why = lyric_text(entry, verified, artist, title)
+    if text < LYRIC_TEXT_BAR:
+        return True, f"sheet already refused ({why})"
+    return False, (f"a line is sung at {first:.1f}s, inside the "
+                   f"{intro_cut:.1f}s about to be cut from the front")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__,

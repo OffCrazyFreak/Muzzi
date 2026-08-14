@@ -126,6 +126,8 @@ def _done_key(path, args):
     """
     if getattr(args, "requested", False):
         return f"requested:{path}"
+    if getattr(args, "intros", False):
+        return f"intros:{path}"
     return f"missing:{path}" if getattr(args, "missing", False) else path
 
 
@@ -376,10 +378,18 @@ def judge(res, an, args):
     # chosen by a search and the length is the only thing standing between
     # "improve quality" and "change the song". Here you already did that
     # checking by looking at it.
+    # What a replacement for THIS file should measure. Normally the length on
+    # disk. In --intros it is that length minus the bumper, because a clean
+    # copy of a track carrying a 7s label intro is 7s shorter and refusing it
+    # for being 7s shorter would refuse exactly what the mode is looking for.
+    # Re-centred rather than relaxed: a copy 40s short is still a different
+    # recording, and the tolerance that catches it is unchanged.
+    bumper = (getattr(args, "intro_cuts", {}) or {}).get(res["path"], 0.0)
+    want_dur = (old_dur - bumper) if old_dur else old_dur
     if not args.requested and res.get("how") != YOURS and old_dur and new_dur \
-            and abs(new_dur - old_dur) > args.max_drift:
+            and abs(new_dur - want_dur) > args.max_drift:
         return drop("rejected",
-                    f"different length ({new_dur:.0f}s vs {old_dur:.0f}s)")
+                    f"different length ({new_dur:.0f}s vs {want_dur:.0f}s)")
 
     if args.missing:
         # Restoring a source that was deleted, not improving one that is still
@@ -477,6 +487,9 @@ def main():
                     help="fetch the rows you asked for by writing "
                          "'redownload' in a review sheet, whatever they "
                          "measure")
+    ap.add_argument("--intros", action="store_true",
+                    help="look for a clean copy of every file you confirmed "
+                         "opens with a label intro, so it need not be cut")
     args = ap.parse_args()
 
     rows = {r["path"]: r for r in json.load(open(REVIEW))}
@@ -506,8 +519,27 @@ def main():
         elif kind == "url":
             links.setdefault(name, hint)
 
+    # The bumpers you confirmed, and how long each one runs. Read whether or
+    # not --intros was passed: judge() needs it to know what length a clean
+    # copy of one of these files should be, and a mode flag is not a good
+    # reason for two runs to measure the same file differently.
+    from pipeline import intros as intros_mod
+    args.intro_cuts = intros_mod.cuts(list(rows))
+
     todo = []
-    if args.requested:
+    if args.intros:
+        # Cutting is lossless: ffmpeg copies the stream and the rest of the
+        # file is bit-identical. So a clean copy has to be at least as good as
+        # the one on disk to be worth taking, and the bandwidth bar below is
+        # left in place rather than waived the way --requested waives it. A
+        # worse-sounding release with no bumper is not an improvement on a
+        # good rip with its bumper removed.
+        for path, _row in rows.items():
+            if path not in args.intro_cuts or f"intros:{path}" in done:
+                continue
+            todo.append((path, rows[path], analysis.get(path) or {}))
+        todo.sort(key=lambda x: x[0])
+    elif args.requested:
         # No bandwidth bar. You listened to it, which is a better measurement
         # of "this sounds wrong" than a spectral cutoff, and a file can be a
         # bad rip at any bitrate.
@@ -557,13 +589,16 @@ def main():
     args.common_root = common_root(list(analysis))
 
     if not todo:
-        left = ("nothing left that you asked for" if args.requested
+        left = ("no confirmed intro left to find a clean copy of"
+                if args.intros
+                else "nothing left that you asked for" if args.requested
                 else "no source file is missing" if args.missing
                 else f"nothing below {args.min_cutoff:.0f}Hz left")
         print(f"  {left} ({len(done)} done)\n")
         return 0
 
-    what = ("files you asked to be fetched again" if args.requested
+    what = ("files open with a confirmed intro" if args.intros
+            else "files you asked to be fetched again" if args.requested
             else "source files are missing" if args.missing
             else f"files measure below {args.min_cutoff:.0f}Hz")
     print(f"\n  {len(todo)} {what} ({len(done)} already attempted)")
@@ -667,6 +702,13 @@ def main():
                   f"YouTube serves m4a. Those rows still read as missing.")
         print("  Re-run fingerprint and analyze over the folder, then review, "
               "before write_tags --prune.\n")
+    elif args.intros:
+        print(f"\n  clean copies -> {OUT_DIR}")
+        print(f"  {stats['kept']} files need no cut once you swap them in; "
+              f"the rest are cut by write_tags from your answer.")
+        print("  Re-run fingerprint, analyze and intros over the folder after "
+              "swapping, so the answer stops applying to a file that no "
+              "longer has the intro.\n")
     else:
         print(f"\n  better files -> {OUT_DIR}")
         print("  originals untouched. Feed the folder back through run.py "

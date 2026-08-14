@@ -86,11 +86,14 @@ _SIL_END = re.compile(r"silence_end:\s*([\d.]+)")
 _RMS = re.compile(r"RMS level dB:\s*(-?[\d.]+|-?inf)", re.IGNORECASE)
 
 
-def _ffmpeg(args, timeout=120):
+def ffmpeg(args, timeout=120):
     """-> ffmpeg's stderr, or None if it could not be run.
 
     Same shape as the rest of the repo's subprocess use: never raises, and a
     missing binary or a hung decode comes back as a value, not an exception.
+
+    Public because `intros.py` snaps its cut to a silent gap and there is no
+    reason for two spellings of the same three lines.
     """
     try:
         p = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-nostats",
@@ -111,7 +114,7 @@ def noise_floor(path):
     music reports something loud, which is not a floor at all -- measure()
     checks for that before letting this move the threshold.
     """
-    err = _ffmpeg(["-t", str(FLOOR_SECS), "-i", path, "-af", "astats"])
+    err = ffmpeg(["-t", str(FLOOR_SECS), "-i", path, "-af", "astats"])
     if err is None:
         return None
     vals = [m.group(1).lower() for m in _RMS.finditer(err)]
@@ -126,7 +129,7 @@ def leading_silence(path, threshold_db):
     at 0 is leading silence; one that opens later is a pause in the music and
     none of our business.
     """
-    err = _ffmpeg(["-t", str(SCAN_SECS), "-i", path, "-af",
+    err = ffmpeg(["-t", str(SCAN_SECS), "-i", path, "-af",
                    f"silencedetect=noise={threshold_db:.1f}dB:d={MIN_SILENCE}"])
     if err is None:
         return None
@@ -169,7 +172,7 @@ def trailing_silence(path, threshold_db, duration=None):
     all ten of the longest tails.
     """
     def reversed_tail(window):
-        err = _ffmpeg(["-sseof", f"-{window}", "-i", path, "-af",
+        err = ffmpeg(["-sseof", f"-{window}", "-i", path, "-af",
                        f"areverse,silencedetect=noise={threshold_db:.1f}dB:"
                        f"d={MIN_SILENCE}"], timeout=300)
         if err is None:
@@ -182,7 +185,7 @@ def trailing_silence(path, threshold_db, duration=None):
 
     def forward_tail():
         """The last silent run that reaches the end of the file."""
-        err = _ffmpeg(["-i", path, "-af",
+        err = ffmpeg(["-i", path, "-af",
                        f"silencedetect=noise={threshold_db:.1f}dB:"
                        f"d={MIN_SILENCE}"], timeout=600)
         if err is None or not duration:

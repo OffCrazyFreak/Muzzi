@@ -49,6 +49,7 @@ from pipeline import lrc  # noqa: E402
 from pipeline import subset  # noqa: E402
 from pipeline import lyric_align  # noqa: E402
 from pipeline import silence  # noqa: E402
+from pipeline import intros  # noqa: E402
 
 VERSION = "muzzi/1"
 REVIEW = os.path.join(HERE, "cache", "review.json")
@@ -1048,7 +1049,7 @@ def _id3_youtube(t, txxx, extra):
 
 
 def _id3_provenance(t, txxx, src, ident, audio, verified, extra, trimmed,
-                    lrc_shift, tail_trimmed=0.0):
+                    lrc_shift, tail_trimmed=0.0, intro_trimmed=0.0):
     """What this build decided, so the next one can tell what to redo."""
     fields = {**(ident or {}), "bpm": audio.get("bpm"), "key": audio.get("camelot")}
     txxx("MUZZI_VERSION", VERSION)
@@ -1067,6 +1068,14 @@ def _id3_provenance(t, txxx, src, ident, audio, verified, extra, trimmed,
     # Always written, like MUZZI_TRIM and for the same reason: a file with no
     # marker cannot be told from one deliberately left whole.
     txxx("MUZZI_TRIM_TAIL", f"{tail_trimmed:.3f}")
+    # How much of MUZZI_TRIM was a label bumper you confirmed. Cleared first,
+    # and written only when there is one: a file whose intro answer changed to
+    # `n` is re-made whole, and a stale marker on it would say the opposite of
+    # what the audio now is. txxx() returns early on an empty value, so the
+    # delete cannot be folded into the write.
+    t.delall("TXXX:MUZZI_TRIM_INTRO")
+    if intro_trimmed:
+        txxx("MUZZI_TRIM_INTRO", f"{intro_trimmed:.3f}")
     if lrc_shift:
         txxx("MUZZI_LRC_SHIFT", f"{lrc_shift:.2f}")
     if verified and verified.get("verdict"):
@@ -1085,8 +1094,15 @@ def _id3_provenance(t, txxx, src, ident, audio, verified, extra, trimmed,
 
 
 def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
-              cut=0.0, lrc_shift=0.0, tail_cut=0.0):
-    """-> (seconds cut off the front, seconds cut off the end)."""
+              cut=0.0, lrc_shift=0.0, tail_cut=0.0, intro_cut=0.0):
+    """-> (seconds cut off the front, seconds cut off the end).
+
+    `intro_cut` is how much of `cut` was a confirmed label bumper rather than
+    measured silence. It changes nothing about the cut, which is one ffmpeg
+    argument either way; it is stamped on the copy so that "this file is 7s
+    shorter than its source" can be read back as a decision someone made
+    rather than as an accident.
+    """
     if dry:
         return 0.0, 0.0
     os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -1114,6 +1130,13 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
     if not os.path.exists(dst):
         trimmed, tail_trimmed = copy_audio(src, dst, cut, tail_cut,
                                            audio.get("decoded_secs"))
+    # Claimed only when the head cut that was wanted is the head cut the file
+    # actually carries. A copy that could not be re-made keeps whatever trim it
+    # has, and calling part of that a bumper would be describing an intention
+    # rather than the audio.
+    intro_trimmed = (min(intro_cut, trimmed)
+                     if intro_cut and abs(trimmed - cut) <= TRIM_EPSILON
+                     else 0.0)
 
     if not dst.lower().endswith(".mp3"):
         primary, _ = canonical_genre(extra.get("genres"))
@@ -1183,6 +1206,11 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
             # marker at all can be told from one deliberately left whole.
             "muzzi_trim": f"{trimmed:.3f}",
             "muzzi_trim_tail": f"{tail_trimmed:.3f}",
+            # Only when there is one, unlike the two above: no version of this
+            # pipeline has ever cut a bumper, so absent reads as "none" with
+            # no ambiguity and 1723 files do not need re-making to say so.
+            "muzzi_trim_intro": (f"{intro_trimmed:.3f}"
+                                 if intro_trimmed else None),
             "muzzi_lrc_shift": (f"{lrc_shift:.2f}" if lrc_shift else None),
             "youtube_id": yt.get("video_id"),
             "youtube_trust": yt.get("trust"),
@@ -1225,7 +1253,7 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
     _id3_lyrics(t, lyrics)
     _id3_youtube(t, txxx, extra)
     _id3_provenance(t, txxx, src, ident, audio, verified, extra, trimmed,
-                    lrc_shift, tail_trimmed)
+                    lrc_shift, tail_trimmed, intro_trimmed)
     # ID3v2.4: Samsung's own guidance says v2.4 is reliably supported while
     # v2.3 "may encounter display issues, such as incorrect character
     # rendering" -- which matters for c/s/z with diacritics. v2.4 also carries
@@ -1393,6 +1421,12 @@ def main():
     sil = json.load(open(SILENCE)) if os.path.exists(SILENCE) else {}
     align = json.load(open(ALIGN)) if os.path.exists(ALIGN) else {}
     yt_links = json.load(open(YT_LINKS)) if os.path.exists(YT_LINKS) else {}
+    # Label bumpers you confirmed by ear. Empty until intros.py has measured
+    # and you have answered, which is the whole safety property: eight NCS
+    # tracks share an opening beat and none of them has an intro.
+    intro_cuts = intros.cuts([r["path"] for r in rows])
+    if intro_cuts:
+        print(f"  cutting a confirmed intro from {len(intro_cuts)} files")
 
     # Album loudness, energy-weighted by duration -- see album_loudness().
     # Album peak is the loudest peak anywhere on the album, because one hot
@@ -1574,6 +1608,14 @@ def main():
         # is still trimmed, and lyric_align.py records why it could not be
         # checked so the review sheet can say so.
         cut = silence.cut_for(sil.get(src))
+        # A confirmed label bumper comes off the same end and through the same
+        # ffmpeg argument, so the two are one number rather than two cuts.
+        # `max` and not a sum: the bumper starts at sample zero, so whatever
+        # dead air sits in front of it is inside the stretch already being
+        # removed, and adding them would take a second and a half of the song
+        # on top. Provisional until the lyric check below.
+        intro_cut = intro_cuts.get(src, 0.0)
+        cut = max(cut, intro_cut)
         # Decided below, once the sheet this file will actually carry is
         # known. Cutting the end is only safe if nothing is sung in there.
         tail_cut = silence.tail_cut_for(sil.get(src))
@@ -1654,6 +1696,24 @@ def main():
             extra_tail_reason = None
 
         offset = lyric_align.offset_for(align.get(src), synced)
+        # The bumper is the one cut here made from an answer rather than a
+        # measurement, so it is the one that has to survive being contradicted
+        # by a sheet. Judged against `entry` rather than the local `synced`,
+        # like the tail is, and only the bumper is given back: the dead air in
+        # front of it was measured silent and is not in dispute.
+        if intro_cut:
+            safe, why = confidence.head_conflict(
+                entry, a.get("decoded_secs"), intro_cut, offset, v,
+                (ident or {}).get("artist"), (ident or {}).get("title"), cut)
+            if not safe:
+                cut = silence.cut_for(sil.get(src))
+                intro_cut = 0.0
+                stats["intro_blocked"] = stats.get("intro_blocked", 0) + 1
+                intro_reason = why
+            else:
+                intro_reason = None
+        else:
+            intro_reason = None
         lrc_shift = (offset - cut) if offset is not None else 0.0
         if abs(lrc_shift) < MIN_LRC_SHIFT:
             lrc_shift = 0.0
@@ -1672,6 +1732,8 @@ def main():
             extra["lyric_reason"] = lyric_reason
         if extra_tail_reason:
             extra["tail_reason"] = extra_tail_reason
+        if intro_reason:
+            extra["intro_reason"] = intro_reason
         if trusted and r.get("proposed_album"):
             akey = f'{r.get("proposed_artist")}|{r["proposed_album"]}'.lower()
             extra["album_gain"] = album_gain.get(akey)
@@ -1695,9 +1757,12 @@ def main():
             written_from.add(os.path.basename(src))
             trimmed, tail_trimmed = write_one(
                 src, dst, ident, a, v, lyrics, extra, dry=args.dry_run,
-                cut=cut, lrc_shift=lrc_shift, tail_cut=tail_cut)
+                cut=cut, lrc_shift=lrc_shift, tail_cut=tail_cut,
+                intro_cut=intro_cut)
             if trimmed:
                 stats["trimmed"] = stats.get("trimmed", 0) + 1
+                if intro_cut:
+                    stats["intro_cut"] = stats.get("intro_cut", 0) + 1
             elif cut and not args.dry_run:
                 # The cut was wanted and did not happen: ffmpeg failed, or the
                 # source is gone and the existing copy could not be re-made.
@@ -1773,6 +1838,12 @@ def main():
         print(f"    timings unjudged, no duration     "
               f"{stats['timing_unknown']:4}   (source publishes none)")
     print(f"    leading silence trimmed           {stats.get('trimmed', 0):4}")
+    if stats.get("intro_cut"):
+        print(f"      of which a confirmed intro      "
+              f"{stats['intro_cut']:4}")
+    if stats.get("intro_blocked"):
+        print(f"    intro kept, lyrics say otherwise  "
+              f"{stats['intro_blocked']:4}")
     print(f"    trailing silence trimmed          "
           f"{stats.get('tail_trimmed', 0):4}")
     if stats.get("tail_blocked"):

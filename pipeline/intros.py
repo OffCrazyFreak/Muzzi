@@ -21,7 +21,16 @@ eight songs.
 So a cluster is a question, not a verdict. Answering `intro=y` on a file cuts
 that file; answering it on one file of a group says nothing about the others,
 because the owner also confirmed that some songs by the same artists carry the
-bumper and some do not.
+bumper and some do not. `intro=<seconds>` cuts a length timed by ear instead,
+on any file, which is the escape hatch for the openings recall still misses.
+
+What actually comes off is not the shared run. The run stops at the last item
+both files agree on, and the item spanning the boundary disagrees on both
+sides, so it undershoots by construction and cutting there leaves a fragment
+behind. song_start() snaps to the silent gap the bumper hands over across
+where there is one, and falls back to the run where the bumper segues straight
+into the first bar. write_tags does the cutting; redownload.py --intros looks
+for a clean copy first, which is better than cutting when one exists.
 
 Three things the measurement has to get right, each learned from a failure:
 
@@ -44,6 +53,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 from collections import defaultdict
 
@@ -79,6 +89,132 @@ ITEM_BITS = 6
 MIN_RUN = 14
 # Fewer distinct songs than this is a coincidence, not a label's bumper.
 MIN_FILES = 3
+
+# How far from the fingerprint's boundary a silent gap may sit and still be
+# taken as the handover from the bumper to the song.
+SNAP = 1.5
+# The gap between a bumper and the first bar is a duck, not digital silence.
+SILENCE_DB = -45.0
+MIN_GAP = 0.12
+# Nothing longer than this is cut, whatever anyone answers. The longest
+# confirmed opening here is 7.5s; a number an order of magnitude past that is
+# a typo, and a typo that deletes the first verse.
+MAX_CUT = 30.0
+
+_SIL_END = re.compile(r"silence_end:\s*([\d.]+)")
+
+
+def _load(path):
+    """-> the JSON at `path`, or {} when it is absent or unreadable."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def stamp(path):
+    """-> (size, mtime) for `path`, or None if it is gone.
+
+    Written next to every proposed cut so a stale answer cannot be applied to
+    a file that has since been replaced. That is not hypothetical: the policy
+    for a confirmed intro is to fetch a clean copy first, and the clean copy
+    lands at the same path under the same name with the bumper already
+    absent. Cutting it again would take the first seven seconds of the song.
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return [st.st_size, int(st.st_mtime)]
+
+
+def song_start(path, nominal):
+    """-> (seconds to cut, whether a gap was found) for one file.
+
+    `nominal` is where the shared opening stops matching, and it undershoots
+    by design: the fingerprint item that spans the boundary already disagrees
+    on both sides, so it is never counted in the run. Cutting there leaves a
+    fragment of the bumper behind.
+
+    Where the bumper hands over across a duck or a beat of quiet, that gap is
+    the real boundary and is worth snapping to. Where it segues straight into
+    the first bar there is nothing to snap to, and the run is the best number
+    anything here has.
+    """
+    from pipeline import silence
+    err = silence.ffmpeg(["-t", f"{nominal + SNAP:.2f}", "-i", path, "-af",
+                          f"silencedetect=noise={SILENCE_DB}dB:d={MIN_GAP}"])
+    if not err:
+        return nominal, False
+    near = [e for e in (float(m.group(1)) for m in _SIL_END.finditer(err))
+            if abs(e - nominal) <= SNAP]
+    if not near:
+        return nominal, False
+    return round(min(near, key=lambda e: abs(e - nominal)), 3), True
+
+
+def answers():
+    """-> {basename: True|False|seconds} from hints.tsv.
+
+    Read here rather than in write_tags, for the reason silence.hinted_trims()
+    is: one place decides, so the review sheet and the file cannot disagree.
+    """
+    out = {}
+    try:
+        from pipeline.review import HINTS, parse_hint
+        if not os.path.exists(HINTS):
+            return out
+        with open(HINTS, encoding="utf-8") as fh:
+            next(fh, None)                      # header: file, hint
+            for line in fh:
+                name, _, hint = line.rstrip("\n").partition("\t")
+                kind, payload = parse_hint(hint)
+                if kind == "intro":
+                    out[name] = payload
+    except Exception:
+        pass                                    # a hint is help, never a gate
+    return out
+
+
+def cuts(paths=None, cache_path=None):
+    """-> {source path: seconds} for every file confirmed to open with a bumper.
+
+    Two ways in, and they are not the same promise.
+
+    `intro=y` takes the length this library measured, and three things have to
+    agree before a second of it comes off: a shared opening was measured, you
+    confirmed it on that file, and the file on disk is still the one that was
+    measured. A group you never answered and a file refetched since both come
+    out of here empty.
+
+    `intro=12` is a length you timed yourself. It applies to the file whatever
+    the measurement says and whether or not the detector ever grouped it,
+    which is what makes it the escape hatch for the openings recall still
+    misses. The cost of that is the one case the stamp would have caught: fetch
+    a clean copy of a file you hand-timed and the number still applies to the
+    replacement, so answer `intro=n` once the new copy is clean.
+    """
+    said = answers()
+    if not said:
+        return {}
+    out = {}
+    blob = _load(cache_path or OUT)
+    for cluster in blob.get("clusters") or []:
+        for f in cluster["files"]:
+            if said.get(f["file"]) is not True:
+                continue                        # unanswered, no, or hand-timed
+            secs = f.get("intro_cut")
+            if not secs or not 0 < secs <= MAX_CUT:
+                continue
+            if f.get("stamp") != stamp(f["path"]):
+                continue                        # replaced since it was measured
+            out[f["path"]] = float(secs)
+    for p in paths or ():
+        told = said.get(os.path.basename(p))
+        if told is not True and told and 0 < told <= MAX_CUT:
+            out[p] = float(told)
+    return out
 
 
 def load(path=None):
@@ -214,6 +350,34 @@ def clusters(rows, run, min_files=MIN_FILES, min_run=None):
     return sorted(out, key=lambda c: -len(c["files"]))
 
 
+def propose(found, workers=None):
+    """Fill in what would actually be cut from each file, in place.
+
+    Separate from clusters() because it decodes audio: the matrix above is
+    arithmetic on fingerprints and runs in a second, and this is one ffmpeg
+    per file. Only the boundary matters, so each scan stops a second and a
+    half past it rather than reading the whole track.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    files = [f for c in found for f in c["files"]]
+    if not files:
+        return found
+    if workers is None:
+        workers = min(8, (os.cpu_count() or 2))
+
+    def one(f):
+        f["stamp"] = stamp(f["path"])
+        secs, snapped = song_start(f["path"], f["shared_secs"])
+        f["intro_cut"] = min(round(secs, 3), MAX_CUT)
+        f["snapped"] = snapped
+
+    # Every worker is waiting on an ffmpeg subprocess, so threads are right
+    # here for the reason they are in silence.py.
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(one, files))
+    return found
+
+
 # What the owner confirmed by ear. The tuner scores against this, so a
 # threshold change that loses a real bumper or admits the NCS beat is visible
 # rather than a matter of taste. Two names per group is enough to identify it.
@@ -272,15 +436,19 @@ def main():
         print()
         return 0
 
-    found = clusters(rows, run_lengths(rows), args.min_files)
+    found = propose(clusters(rows, run_lengths(rows), args.min_files))
     total = sum(len(c["files"]) for c in found)
-    print(f"  {len(found)} shared openings across {total} files\n")
+    snapped = sum(1 for c in found for f in c["files"] if f.get("snapped"))
+    print(f"  {len(found)} shared openings across {total} files, "
+          f"{snapped} of them cutting at a gap rather than at the run\n")
     for c in found:
         print(f"    {len(c['files'])} files ({c['distinct_songs']} songs), "
               f"{c['balkan']} Balkan, median {c['median_secs']:.2f}s"
               + (f", {c['chained_out']} chained out" if c["chained_out"] else ""))
         for f in c["files"][:6]:
-            print(f"       {f['shared_secs']:5.2f}s  {f['file'][:62]}")
+            print(f"       {f['shared_secs']:5.2f}s shared, cut "
+                  f"{f.get('intro_cut', 0):5.2f}s"
+                  f"{'*' if f.get('snapped') else ' '}  {f['file'][:48]}")
         if len(c["files"]) > 6:
             print(f"       ... and {len(c['files']) - 6} more")
         print()
@@ -291,7 +459,9 @@ def main():
     print(f"  -> {OUT}")
     print("\n  Nothing is cut from this. Each file becomes a review row, and\n"
           "  only an answer turns into a cut: eight NCS tracks share an\n"
-          "  opening beat and none of them has an intro.\n")
+          "  opening beat and none of them has an intro. `intro=y` takes the\n"
+          "  measured length above, `intro=7.5` takes yours, `intro=n` keeps\n"
+          "  the file whole. A `*` means the cut lands on a silent gap.\n")
     return 0
 
 
