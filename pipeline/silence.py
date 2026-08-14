@@ -63,10 +63,22 @@ MIN_TRIM = 0.2
 MAX_TRIM = 10.0
 # Leave this much silence in front so a soft attack survives the cut.
 GUARD = 0.04
+# And this much behind. Ten times the head's guard, deliberately: an abrupt cut
+# on a decaying last note is far more audible than a late start, and half a
+# second of run-off is what a track is expected to end with anyway.
+TAIL_GUARD = 0.5
+# Below this much reclaimed, remuxing the file buys nothing worth the churn.
+# With the guard above, that means a tail is cut from 1.0s of silence up.
+TAIL_MIN_GAIN = 0.5
 # A silence has to last this long to count, and we look this far in.
 MIN_SILENCE = 0.05
 SCAN_SECS = 30
 FLOOR_SECS = 0.2
+# How close to the edge of the scan window counts as touching it. Frame
+# granularity and the reverse filter both move the boundary by a few tens of
+# milliseconds, so an exact comparison would miss the clipped files it exists
+# to catch.
+EDGE_TOLERANCE = 0.5
 
 _SIL_START = re.compile(r"silence_start:\s*(-?[\d.]+)")
 _SIL_END = re.compile(r"silence_end:\s*([\d.]+)")
@@ -129,6 +141,53 @@ def leading_silence(path, threshold_db):
     return float(end.group(1)) if end else float(SCAN_SECS)
 
 
+def trailing_silence(path, threshold_db, duration=None):
+    """-> seconds of silence at the very end, 0.0 when the file ends loud.
+
+    Measured by decoding the last stretch, reversing it with `areverse` and
+    reading the run that then opens at 0. Same filter, same thresholds, same
+    code path as the head, so the two numbers are directly comparable, which
+    they would not be if the tail were derived from `silence_start` markers
+    against a duration read from somewhere else.
+
+    The scan window is the one hazard. ffmpeg emits a `silence_end` at the
+    segment boundary whether or not the silence really ended there, so a file
+    whose dead air is longer than the window reads as exactly one window's
+    worth. Measured on the library, that clipped 5 files. When the run reaches
+    the edge, the whole file is rescanned rather than trusted.
+    """
+    def scan(window):
+        args = ["-i", path, "-af",
+                f"areverse,silencedetect=noise={threshold_db:.1f}dB:"
+                f"d={MIN_SILENCE}"]
+        if window:
+            # Seek before the input so only the tail is decoded. Without a
+            # duration there is nothing to seek to, and the whole file is read.
+            args = ["-sseof", f"-{window}"] + args
+        err = _ffmpeg(args, timeout=300)
+        if err is None:
+            return None
+        start = _SIL_START.search(err)
+        if not start or abs(float(start.group(1))) > 0.001:
+            return 0.0
+        end = _SIL_END.search(err)
+        return float(end.group(1)) if end else None
+
+    window = SCAN_SECS if duration and duration > SCAN_SECS else None
+    got = scan(window)
+    # A run that reaches the edge of the window was cut off by the window, not
+    # by the music. ffmpeg closes it with a `silence_end` at the boundary
+    # regardless, so this cannot be told from a genuine ending and has to be
+    # rescanned whole. Measured: without this, four of the ten longest files in
+    # the library report exactly the window instead of their real 30 to 36
+    # seconds, and every one of them would then be under-cut by that much.
+    if window and (got is None or got >= window - EDGE_TOLERANCE):
+        got = scan(None)
+    if got is None:
+        return float(duration) if duration else None
+    return got
+
+
 def hinted_trims():
     """-> {basename: True|False} from hints.tsv, for files you have ruled on.
 
@@ -152,11 +211,16 @@ def hinted_trims():
     return out
 
 
-def measure(path, hint=None):
+def measure(path, hint=None, duration=None):
     """-> the record cached for one source file.
 
     `hint` is your answer from sheet 4: False pins the file at full length,
     True releases one whose silence was too long to cut without being asked.
+    It governs both ends, because it is an answer about this file rather than
+    about one of its edges.
+
+    `duration` lets the tail scan seek instead of decoding the whole file. It
+    comes from analyze, and its absence costs time rather than accuracy.
     """
     if not os.path.exists(path):
         return {"path": path, "error": "missing"}
@@ -167,6 +231,7 @@ def measure(path, hint=None):
             threshold = min(MAX_THRESHOLD_DB,
                             max(BASE_THRESHOLD_DB, floor + FLOOR_MARGIN_DB))
         lead = leading_silence(path, threshold)
+        tail = trailing_silence(path, threshold, duration)
     except Exception as e:
         return {"path": path, "error": f"{type(e).__name__}: {str(e)[:150]}"}
     if lead is None:
@@ -175,6 +240,8 @@ def measure(path, hint=None):
     rec = {"path": path, "lead": round(lead, 3),
            "noise_floor_db": round(floor, 1) if floor is not None else None,
            "threshold_db": round(threshold, 1)}
+    if tail is not None:
+        rec["tail"] = round(tail, 3)
     if hint is not None:
         rec["hinted"] = bool(hint)
     if lead <= 0.0:
@@ -188,11 +255,30 @@ def measure(path, hint=None):
     else:
         rec["decision"] = "trim"
         rec["cut"] = round(max(0.0, lead - GUARD), 3)
+
+    # The tail decides separately. A quiet intro is usually a quiet intro,
+    # which is why the head sends anything over ten seconds to be looked at;
+    # a quiet outro is dead air, verified digital silence in every one of the
+    # longest cases in this library, so there is no ceiling here. What guards
+    # the tail instead is the lyric check in write_tags: a cut that would
+    # remove audio a synced sheet still has words for is a contradiction, and
+    # contradictions are not resolved by cutting.
+    if tail is None:
+        rec["tail_decision"] = "unmeasured"
+    elif tail <= 0.0:
+        rec["tail_decision"] = "no_trailing_silence"
+    elif hint is False:
+        rec["tail_decision"] = "kept_by_you"
+    elif tail - TAIL_GUARD < TAIL_MIN_GAIN:
+        rec["tail_decision"] = "skip_short"
+    else:
+        rec["tail_decision"] = "trim"
+        rec["tail_cut"] = round(max(0.0, tail - TAIL_GUARD), 3)
     return rec
 
 
 def cut_for(rec):
-    """-> how much to take off this file, or 0.0 to copy it untouched.
+    """-> how much to take off the front, or 0.0 to copy it untouched.
 
     The one place the decision is read. Anything that is not a clean `trim`
     verdict -- an error, a long intro waiting on review, a file measured by an
@@ -201,6 +287,18 @@ def cut_for(rec):
     if not isinstance(rec, dict) or rec.get("decision") != "trim":
         return 0.0
     return float(rec.get("cut") or 0.0)
+
+
+def tail_cut_for(rec):
+    """-> how much to take off the end, or 0.0 to copy it whole.
+
+    Same rule as `cut_for`, and separate from it on purpose: a record written
+    before this stage measured tails has no `tail_decision` at all, and must
+    keep its whole ending rather than inherit the head's verdict.
+    """
+    if not isinstance(rec, dict) or rec.get("tail_decision") != "trim":
+        return 0.0
+    return float(rec.get("tail_cut") or 0.0)
 
 
 def main():
@@ -232,9 +330,22 @@ def main():
         if p and p not in seen:
             seen.add(p)
             paths.append(p)
+    # Only to let the tail scan seek to the end instead of decoding the whole
+    # file. A path analyze has not reached yet is measured the slow way rather
+    # than skipped.
+    secs = {}
+    if os.path.exists(ANALYSIS):
+        for v in json.load(open(ANALYSIS)).values():
+            if v.get("path") and v.get("decoded_secs"):
+                secs[v["path"]] = v["decoded_secs"]
+
     hints = hinted_trims()
+    # A record from before this stage measured tails has no `tail_decision`,
+    # and re-measuring it is the only way it ever gets one. Without this the
+    # whole library keeps its dead air until someone passes --force.
     todo = [p for p in paths
             if p not in done
+            or "tail_decision" not in done[p]
             or done[p].get("hinted") != hints.get(os.path.basename(p))]
     if args.limit:
         todo = todo[: args.limit]
@@ -251,7 +362,8 @@ def main():
     failed = Counter()
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = [ex.submit(measure, p, hints.get(os.path.basename(p)))
+        futures = [ex.submit(measure, p, hints.get(os.path.basename(p)),
+                             secs.get(p))
                    for p in todo]
         for f in as_completed(futures):
             try:

@@ -280,7 +280,7 @@ can't be wrong about which file it's describing:
 |---|---|
 | `analyze` | BPM (three engines), musical key -> Camelot, loudness and true peak (ffmpeg EBU R128), danceability, spectral cutoff |
 | `dedupe` | files whose fingerprints match: the same recording twice |
-| `silence` | how much dead air each file opens with, and whether it is safe to cut. Measures the *source*, so the figure never changes and trimming can never happen twice |
+| `silence` | how much dead air each file opens and ends with, and whether either is safe to cut. Measures the *source*, so the figures never change and trimming can never happen twice |
 | `verify_lyrics` | Whisper transcribes the audio and compares it to the fetched lyrics -- independent proof the file is the song we think, plus language detection. Each score records a digest of the sheet it judged, so a track whose lyrics later change is re-scored and one whose lyrics did not is still skipped |
 | `lyric_align` | how far each synced lyric sheet is out of step with its audio, by locating the opening lines in a word-timestamped transcript |
 
@@ -488,12 +488,14 @@ ReplayGain.** `cache/analysis.json` describes the *source* files; `write_tags`
 copies those into `output/_all`. Re-encoding a copy, or otherwise touching its
 audio, leaves the tags describing audio the file no longer contains.
 
-Trimming leading silence is the exception, and it is worth naming because it
-looks like the rule. Measured on six trimmed files with cuts of 0.5 to 4.7s,
+Trimming silence is the exception, and it is worth naming because it looks
+like the rule. Measured on six trimmed files with cuts of 0.5 to 4.7s,
 integrated loudness moved 0.00 dB on all six and true peak moved 0.00 dB on
 five and 0.10 on the sixth: BS.1770 gates silence out of the integrated
 figure, and a region quiet enough to cut cannot hold the peak. The trim stage
-therefore owes the loudness stage nothing.
+therefore owes the loudness stage nothing. The same argument covers the tail,
+which is cut by the same lossless frame-copy and is silent by the same
+measurement.
 
 `analyze.py --refresh-loudness` will **not** catch this, and cannot: it
 re-measures the source, which did not change. Nor will `--force`. The check
@@ -501,6 +503,26 @@ that does catch it is `tools/audit_compare.py`, which measures `output/_all`
 itself and reports the written gain against the real file. So a stage that
 edits output audio owns re-tagging what it edited, and the audit is what proves
 it did.
+
+**Dead air comes off both ends, and a lyric sheet can veto the tail.** The
+head keeps 0.04s and sends anything over 10s to be looked at, because a long
+quiet opening is usually a quiet intro. The tail keeps 0.5s and has no such
+ceiling, because a long quiet ending is dead air: measured across the library,
+32% of files end with 3s or more, the worst with 35.9s, and the longest cases
+are true digital silence rather than a fade. Both figures are measured on the
+source with the same filter and the same thresholds, so they are comparable,
+and both are stamped into the copy (`MUZZI_TRIM`, `MUZZI_TRIM_TAIL`) so a
+changed policy re-makes the file instead of cutting it twice.
+
+What guards the tail instead of a ceiling is the lyrics. If a synced sheet
+still has a line sung inside the stretch about to be removed, two measurements
+contradict each other and the one that deletes something does not win by
+default. The pipeline settles what it can on its own: a sheet whose timings
+were already refused contributes no timestamps to the output, so there is
+nothing left to contradict. What it cannot settle goes to sheet 4 naming the
+line and the second, where `trim=y` cuts it anyway and `trim=n` keeps the file
+whole for good. Cutting the end moves no timestamp, so unlike the head this
+needs no `.lrc` re-timing.
 
 **BPM.** Three engines vote (Essentia RhythmExtractor2013 multifeature, degara,
 PercivalBpmEstimator). Validated 20/20 within 4% against published values for

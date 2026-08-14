@@ -407,6 +407,16 @@ def timing_rows(rows):
                        f"({a.get('status')})")
         art, tit = r.get("proposed_artist"), r.get("proposed_title")
         entry = lyr.get(f"{art}|{tit}".lower()) if (art and tit) else None
+        # A tail cut that a lyric sheet contradicts. write_tags declines to
+        # make it and there is no other way to find out: the file simply keeps
+        # its dead air, and the reason it keeps it is the interesting part.
+        tail = silence.tail_cut_for(s)
+        if tail:
+            ok, tail_why = confidence.tail_conflict(
+                entry, secs.get(p), tail, verified.get(p), art, tit)
+            if not ok:
+                why.append(f"{tail_why}, so the {tail:.1f}s was left alone; "
+                           f"trim=y cuts it anyway, trim=n keeps it for good")
         if isinstance(entry, dict) and (entry.get("synced") or entry.get("plain")):
             ok, reason = lyrics_trustworthy(entry, verified.get(p), art, tit)
             if ok and entry.get("synced"):
