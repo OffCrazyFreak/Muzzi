@@ -334,12 +334,12 @@ there is nothing left to answer.
 | `1 - needs a link.ods` | nothing found anywhere | a URL |
 | `2 - confirm the name.ods` | a name was proposed but the filename disagrees | `y` or `n` |
 | `3 - check the rest.ods` | everything else, least confident first | anything |
-| `4 - confirm the youtube link.ods` | a video was found but not confidently enough to write it | a URL, or `n` |
 | `4 - trim and lyric timing.ods` | timing, not identity: a long quiet opening, a lyric sheet timed for another edit, or a tail cut a sheet contradicts | `trim=y` or `trim=n` |
+| `5 - confirm the youtube link.ods` | a video was found but not confidently enough to write it | a URL, `y`, or `n` |
 
-Both are numbered 4 because they are written by different stages and neither
-depends on the other. They are separate files and answering one has no effect
-on the other.
+Sheets 1 to 4 are written by `review`, sheet 5 by `yt_links`, and its number is
+derived from how many the first stage writes rather than spelled out, so adding
+one there cannot put two sheets under the same number again.
 
 The YouTube sheet's answers go in its own **`link`** column, not `hint`: a bare
 `y` in the hint column means the artist and title are right, which is a

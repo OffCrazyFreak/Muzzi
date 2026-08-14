@@ -68,8 +68,8 @@ sys.path.insert(0, HERE)
 
 from pipeline.hints_resolve import video_id  # noqa: E402
 from pipeline.identify import RateLimiter  # noqa: E402
-from pipeline.review import (_hints_from_ods, _ods, load_hints,  # noqa: E402
-                             load_links, save_hints)
+from pipeline.review import (SHEETS, _hints_from_ods, _ods,  # noqa: E402
+                             load_hints, load_links, save_hints)
 from pipeline.textsearch import get_with_retry  # noqa: E402
 from pipeline.useragent import UA  # noqa: E402
 from pipeline.webmatch import fit, src_ytmusic, version_mismatch  # noqa: E402
@@ -91,7 +91,12 @@ OUT = os.path.join(HERE, "cache", "youtube_links.json")
 # it, because the sheet that asked has been rebuilt by the time it is read.
 PROPOSED = os.path.join(HERE, "cache", "yt_proposed.json")
 
-SHEET = "4 - confirm the youtube link"
+# Numbered after review.py's own sheets rather than beside them. Both stages
+# used to write a "4 -", so review/ held two sheets with the same number
+# asking different questions and taking different answers, which is exactly
+# what the numbering exists to prevent. Derived rather than written out, so
+# adding a sheet there cannot silently collide again.
+SHEET = f"{len(SHEETS) + 1} - confirm the youtube link"
 SHEET_NOTE = ("A YouTube link was found for these, but not confidently enough "
               "to write it into the file. Put the right link in the 'link' "
               "column, or 'n' to refuse one. Blank means leave it alone.")
