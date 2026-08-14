@@ -366,7 +366,14 @@ def intro_rows(rows):
     by_path = {r["path"]: r for r in rows if r.get("path")}
     out = []
     for n, cluster in enumerate(found, 1):
-        members = [f for f in cluster["files"] if f["file"] not in answered]
+        # An answered file drops out, except one whose audio has changed since
+        # you answered. That answer was about a file that is no longer there,
+        # `intros.cuts()` refuses to act on it, and if the row did not come
+        # back the refusal would be silent and there would be no way to
+        # correct it: the sheet is a view and hints.tsv is the record, so a
+        # question the record cannot answer has to be asked again.
+        members = [f for f in cluster["files"]
+                   if f["file"] not in answered or f.get("changed_since_answered")]
         if not members:
             continue
         others = len(cluster["files"]) - 1
@@ -379,15 +386,27 @@ def intro_rows(rows):
             # snaps the cut to the gap the bumper hands over across where
             # there is one. Say the number that will be used, not the one it
             # was derived from.
-            secs = f.get("intro_cut") or f["shared_secs"]
+            #
+            # Only when there is one. `cuts()` accepts a measured length and
+            # nothing else, so offering the run as a fallback would promise a
+            # cut that the answer cannot deliver: on a cache written before
+            # propose() existed, every row would read "intro=y cuts 6.1s" and
+            # every `y` would silently do nothing. Say so instead.
+            secs = f.get("intro_cut")
             row = dict(r)
+            how = (f"intro=y cuts {secs:.1f}s" if secs else
+                   "intro=y needs a length: re-run intros.py first")
+            again = ("this file has changed since you answered, so the old "
+                     "answer is not being used; " if
+                     f.get("changed_since_answered") else "")
             row["reasons"] = [
+                f"{again}"
                 f"opens with the same {f['shared_secs']:.1f}s as {others} "
                 f"other file{'s' if others != 1 else ''} (group {n}); "
-                f"intro=y cuts {secs:.1f}s, intro=n keeps it, "
+                f"{how}, intro=n keeps it, "
                 f"intro=<seconds> cuts the length you time yourself"]
             row["intro_group"] = n
-            row["intro_secs"] = round(secs, 2)
+            row["intro_secs"] = round(secs, 2) if secs else ""
             out.append(row)
     return out
 

@@ -1608,22 +1608,54 @@ def main():
         # is still trimmed, and lyric_align.py records why it could not be
         # checked so the review sheet can say so.
         cut = silence.cut_for(sil.get(src))
+        # Decided below, once the sheet this file will actually carry is
+        # known. Cutting the end is only safe if nothing is sung in there.
+        tail_cut = silence.tail_cut_for(sil.get(src))
+
+        # The sheet this file might carry, read before any cut is settled.
+        # The intro decision needs it, and so do the gates below, and it is a
+        # dictionary lookup either way.
+        entry = (lyric_cache.get(f'{ident["artist"]}|{ident["title"]}'.lower())
+                 if ident else None)
+
+        # The bumper is the one cut here made from an answer rather than a
+        # measurement, so it is the one that has to survive being contradicted
+        # by a sheet. Judged against `entry`, like the tail is, and against the
+        # sheet's own offset rather than the post-gate one: the question is
+        # about the words this file came with, not about whether they survived
+        # a check that has not run yet.
+        #
+        # Settled BEFORE the lyric gates, and that ordering is the point. The
+        # gates judge timings against the length the copy will actually be, so
+        # running them against a provisional cut and then withdrawing it left
+        # a file stripped of its timestamps because of a cut that was refused.
+        intro_cut = intro_cuts.get(src, 0.0)
+        if intro_cut:
+            safe, why = confidence.head_conflict(
+                entry, a.get("decoded_secs"), intro_cut,
+                lyric_align.offset_for(
+                    align.get(src),
+                    entry.get("synced") if isinstance(entry, dict) else None),
+                v, (ident or {}).get("artist"), (ident or {}).get("title"),
+                max(cut, intro_cut))
+            if not safe:
+                intro_cut = 0.0
+                stats["intro_blocked"] = stats.get("intro_blocked", 0) + 1
+                intro_reason = why
+            else:
+                intro_reason = None
+        else:
+            intro_reason = None
         # A confirmed label bumper comes off the same end and through the same
         # ffmpeg argument, so the two are one number rather than two cuts.
         # `max` and not a sum: the bumper starts at sample zero, so whatever
         # dead air sits in front of it is inside the stretch already being
         # removed, and adding them would take a second and a half of the song
-        # on top. Provisional until the lyric check below.
-        intro_cut = intro_cuts.get(src, 0.0)
+        # on top.
         cut = max(cut, intro_cut)
-        # Decided below, once the sheet this file will actually carry is
-        # known. Cutting the end is only safe if nothing is sung in there.
-        tail_cut = silence.tail_cut_for(sil.get(src))
 
         lyrics, synced, lyric_reason = None, None, None
-        entry = None
         if ident:
-            entry = lyric_cache.get(f'{ident["artist"]}|{ident["title"]}'.lower())
             if isinstance(entry, dict):
                 synced, lyrics = entry.get("synced"), entry.get("plain")
             elif isinstance(entry, str):
@@ -1696,24 +1728,6 @@ def main():
             extra_tail_reason = None
 
         offset = lyric_align.offset_for(align.get(src), synced)
-        # The bumper is the one cut here made from an answer rather than a
-        # measurement, so it is the one that has to survive being contradicted
-        # by a sheet. Judged against `entry` rather than the local `synced`,
-        # like the tail is, and only the bumper is given back: the dead air in
-        # front of it was measured silent and is not in dispute.
-        if intro_cut:
-            safe, why = confidence.head_conflict(
-                entry, a.get("decoded_secs"), intro_cut, offset, v,
-                (ident or {}).get("artist"), (ident or {}).get("title"), cut)
-            if not safe:
-                cut = silence.cut_for(sil.get(src))
-                intro_cut = 0.0
-                stats["intro_blocked"] = stats.get("intro_blocked", 0) + 1
-                intro_reason = why
-            else:
-                intro_reason = None
-        else:
-            intro_reason = None
         lrc_shift = (offset - cut) if offset is not None else 0.0
         if abs(lrc_shift) < MIN_LRC_SHIFT:
             lrc_shift = 0.0

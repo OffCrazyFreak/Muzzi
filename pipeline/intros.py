@@ -146,6 +146,13 @@ def song_start(path, nominal):
     the real boundary and is worth snapping to. Where it segues straight into
     the first bar there is nothing to snap to, and the run is the best number
     anything here has.
+
+    Seconds is None when the scan could not be run at all, which is a
+    different answer from "no gap here" and has to stay different. ffmpeg
+    missing, a decode that timed out and a source that has gone all come back
+    that way, and returning `nominal` for them would file the undershooting
+    run as a measurement. Every grouped file would then carry a length nobody
+    measured, and `intro=y` would cut it.
     """
     from pipeline import silence
     # Scanned past the far edge of the band, not up to it. `silencedetect`
@@ -163,6 +170,8 @@ def song_start(path, nominal):
     window = nominal + SNAP + EDGE_PAD
     err = silence.ffmpeg(["-t", f"{window:.2f}", "-i", path, "-af",
                           f"silencedetect=noise={SILENCE_DB}dB:d={MIN_GAP}"])
+    if err is None:
+        return None, False               # could not look, so nothing is known
     if not err:
         return nominal, False
     near = [e for e in (float(m.group(1)) for m in _SIL_END.finditer(err))
@@ -227,6 +236,13 @@ def cuts(paths=None, cache_path=None):
                 continue
             if f.get("stamp") != stamp(f["path"]):
                 continue                        # replaced since it was measured
+            if f.get("changed_since_answered"):
+                # Replaced, and then measured again, which puts the stamp back
+                # in step and would otherwise re-arm an answer given about the
+                # file that is gone. The measurement is current; the answer is
+                # not, and only one of the two knows whether the bumper is
+                # still there.
+                continue
             out[f["path"]] = float(secs)
     for p in paths or ():
         told = said.get(os.path.basename(p))
@@ -375,6 +391,19 @@ def propose(found, workers=None):
     arithmetic on fingerprints and runs in a second, and this is one ffmpeg
     per file. Only the boundary matters, so each scan stops a second and a
     half past it rather than reading the whole track.
+
+    Incremental, and that is a correctness property here rather than a saving.
+    The stamp `cuts()` checks is written by this function, so re-stamping
+    every run would refresh the guard against whatever is on disk now: swap in
+    the clean copy that `--intros` fetched, re-run this, and the stamp matches
+    again, which re-arms a confirmed `intro=y` against a file whose bumper is
+    already gone. That is the case stamp() exists to prevent, and rewriting an
+    entry that is already correct is how it was being defeated. A file is
+    re-measured only when its stamp has moved or it has no length yet.
+
+    The last run's entries are read back from the cache for that, keyed by
+    path, because clusters() rebuilds its dicts from the fingerprints every
+    time and the stamp written last time is not in them.
     """
     from concurrent.futures import ThreadPoolExecutor
     files = [f for c in found for f in c["files"]]
@@ -382,12 +411,43 @@ def propose(found, workers=None):
         return found
     if workers is None:
         workers = min(8, (os.cpu_count() or 2))
+    was = {}
+    for c in (_load(OUT).get("clusters") or []):
+        for f in c.get("files") or ():
+            if f.get("path") and f.get("intro_cut"):
+                was[f["path"]] = f
 
     def one(f):
-        f["stamp"] = stamp(f["path"])
+        now = stamp(f["path"])
+        old = was.get(f["path"])
+        if old is not None and old.get("stamp") == now:
+            # Measured already, on this exact file. Keep the recorded stamp
+            # rather than writing an identical one, so the guard keeps
+            # pointing at the moment the measurement was actually taken.
+            f["stamp"] = old["stamp"]
+            f["intro_cut"] = old["intro_cut"]
+            f["snapped"] = old.get("snapped", False)
+            return
         secs, snapped = song_start(f["path"], f["shared_secs"])
+        if secs is None:
+            # The scan failed. No length, so cuts() has nothing to accept and
+            # a later run will try again.
+            f.pop("intro_cut", None)
+            f["stamp"], f["snapped"] = now, False
+            return
+        f["stamp"] = now
         f["intro_cut"] = min(round(secs, 3), MAX_CUT)
         f["snapped"] = snapped
+        # Measured before, and the file has moved since. The measurement below
+        # is of whatever is there now, but the ANSWER on record was given about
+        # what was there before, and the two are not the same question: the
+        # policy for a confirmed bumper is to fetch a clean copy and swap it
+        # in, so "this file changed" is the expected shape of exactly the case
+        # that must not be cut twice. Marked rather than cut, and cuts()
+        # refuses it until you answer again. Refusing costs a bumper left in;
+        # the other way round costs the first seven seconds of the song.
+        if old is not None:
+            f["changed_since_answered"] = True
 
     # Every worker is waiting on an ffmpeg subprocess, so threads are right
     # here for the reason they are in silence.py.

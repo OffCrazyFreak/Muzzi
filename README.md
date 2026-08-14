@@ -565,12 +565,34 @@ conflict is a sheet already in step with the rip that still has words inside
 the opening about to go, and the cut is refused there. An offset that was never
 measured is not a conflict, because there is no second measurement to prefer.
 
+The two answers do not expire the same way, which matters after a swap. An
+`intro=y` disarms itself: it needs the measured length and a file whose size
+and mtime still match the measurement, so a copy fetched since is not cut. A
+length you typed has no such condition, deliberately, because it is the escape
+hatch for openings the detector never grouped and there is nothing to match it
+against. Change those rows to `intro=n` once a clean copy is in.
+
 Cutting is lossless (`-c copy`, so the rest of the file is bit-identical), and
 `redownload.py --intros` still looks for a clean copy first, which is the
-better artifact where one exists. It expects that copy to be shorter by the
-bumper rather than the same length, and keeps the bandwidth bar the
+better artifact where one exists. It accepts that copy at either the original
+length or the original minus the bumper, and keeps the bandwidth bar the
 `redownload` hint waives: a worse-sounding release with no intro is not an
 improvement on a good rip with its intro removed.
+
+`MUZZI_TRIM_INTRO` records how much of the head cut was a confirmed bumper: a
+`TXXX` frame on ID3, a `----:com.apple.iTunes` freeform atom on MP4, written
+only when there is a cut and deleted when there is not.
+
+| player | what it does with `MUZZI_TRIM_INTRO` |
+|---|---|
+| Namida | ignores it, and plays a file that starts on the song |
+| Samsung Music | ignores it, and reads the shifted `.lrc` sidecar as before |
+| generic Android | ignores it |
+
+No player reads it, and nothing depends on one that does. It exists so a later
+run can tell a file deliberately cut from a file that was always short. What
+every player sees instead is the audio: a stream copy that starts on the song,
+with the embedded sheet and the sidecar shifted together by the same amount.
 
 **BPM.** Three engines vote (Essentia RhythmExtractor2013 multifeature, degara,
 PercivalBpmEstimator). Validated 20/20 within 4% against published values for

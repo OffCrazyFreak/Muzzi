@@ -116,18 +116,30 @@ JS_RUNTIME_GLOBS = (
 YOURS = "the link you gave"
 
 
+# The prefixed namespaces in the shared report. The default mode has none, so
+# it is identified by carrying none of these.
+NAMESPACES = ("intros:", "requested:", "missing:")
+
+
 def _done_key(path, args):
     """Where an attempt is recorded in the shared report.
 
-    The two modes ask different questions about the same path, so they cannot
+    The modes ask different questions about the same path, so they cannot
     share a completion key: a file this tool once judged for its bandwidth is
     exactly the file that may later go missing, and it would then be skipped
     forever as "already attempted".
+
+    Tested in the same order main() builds its queue in, and the two are only
+    ever going to agree by being written to. Disagreeing was a real defect:
+    the queue preferred --intros while this preferred --requested, so a run
+    with both recorded `requested:` for work the intro queue would look for
+    under `intros:` and hand back the same file for ever. main() now refuses
+    the combination outright, which makes this belt to that braces.
     """
-    if getattr(args, "requested", False):
-        return f"requested:{path}"
     if getattr(args, "intros", False):
         return f"intros:{path}"
+    if getattr(args, "requested", False):
+        return f"requested:{path}"
     return f"missing:{path}" if getattr(args, "missing", False) else path
 
 
@@ -378,18 +390,25 @@ def judge(res, an, args):
     # chosen by a search and the length is the only thing standing between
     # "improve quality" and "change the song". Here you already did that
     # checking by looking at it.
-    # What a replacement for THIS file should measure. Normally the length on
-    # disk. In --intros it is that length minus the bumper, because a clean
-    # copy of a track carrying a 7s label intro is 7s shorter and refusing it
-    # for being 7s shorter would refuse exactly what the mode is looking for.
-    # Re-centred rather than relaxed: a copy 40s short is still a different
-    # recording, and the tolerance that catches it is unchanged.
+    # What a replacement for THIS file may measure. The length on disk, always,
+    # and for a file with a confirmed bumper also that length minus the bumper:
+    # a clean copy of a track carrying a 7s label intro is 7s shorter, and
+    # refusing it for being 7s shorter would refuse exactly what --intros is
+    # looking for.
+    #
+    # Two accepted lengths and not one moved. Subtracting unconditionally, as
+    # this first did, re-centres the window in every mode, so an ordinary
+    # quality run would start rejecting the same-length candidate that still
+    # carries the bumper, which is the usual case and the one it exists to
+    # improve. Neither length is relaxed: a copy 40s short is still a different
+    # recording and the tolerance that catches it is unchanged.
     bumper = (getattr(args, "intro_cuts", {}) or {}).get(res["path"], 0.0)
-    want_dur = (old_dur - bumper) if old_dur else old_dur
+    allowed = [old_dur] + ([old_dur - bumper] if bumper else [])
     if not args.requested and res.get("how") != YOURS and old_dur and new_dur \
-            and abs(new_dur - want_dur) > args.max_drift:
+            and min(abs(new_dur - w) for w in allowed) > args.max_drift:
         return drop("rejected",
-                    f"different length ({new_dur:.0f}s vs {want_dur:.0f}s)")
+                    f"different length ({new_dur:.0f}s vs "
+                    + " or ".join(f"{w:.0f}s" for w in allowed) + ")")
 
     if args.missing:
         # Restoring a source that was deleted, not improving one that is still
@@ -491,6 +510,12 @@ def main():
                     help="look for a clean copy of every file you confirmed "
                          "opens with a label intro, so it need not be cut")
     args = ap.parse_args()
+    # Each mode has its own queue, its own bandwidth rule and its own
+    # completion key, so "both" has no meaning that is not one of them
+    # silently winning. Said out loud rather than resolved by precedence.
+    picked = [n for n in ("intros", "requested", "missing") if getattr(args, n)]
+    if len(picked) > 1:
+        ap.error("pick one mode: " + ", ".join("--" + n for n in picked))
 
     rows = {r["path"]: r for r in json.load(open(REVIEW))}
     analysis = {v["path"]: v for v in json.load(open(ANALYSIS)).values()
@@ -588,20 +613,29 @@ def main():
 
     args.common_root = common_root(list(analysis))
 
+    # This mode's attempts, not every attempt this tool has ever made. The
+    # report is one file holding four namespaces, so a bare len() told an
+    # --intros run it had already attempted the 628 files a quality sweep
+    # looked at. The default mode is the unprefixed namespace, so it is
+    # whatever carries none of the three prefixes.
+    prefix = _done_key("", args)
+    tried = sum(1 for k in done if (k.startswith(prefix) if prefix
+                                    else not k.startswith(NAMESPACES)))
+
     if not todo:
         left = ("no confirmed intro left to find a clean copy of"
                 if args.intros
                 else "nothing left that you asked for" if args.requested
                 else "no source file is missing" if args.missing
                 else f"nothing below {args.min_cutoff:.0f}Hz left")
-        print(f"  {left} ({len(done)} done)\n")
+        print(f"  {left} ({tried} done)\n")
         return 0
 
     what = ("files open with a confirmed intro" if args.intros
             else "files you asked to be fetched again" if args.requested
             else "source files are missing" if args.missing
             else f"files measure below {args.min_cutoff:.0f}Hz")
-    print(f"\n  {len(todo)} {what} ({len(done)} already attempted)")
+    print(f"\n  {len(todo)} {what} ({tried} already attempted)")
     if args.dry_run:
         for path, row, an in todo[:40]:
             mark = ("  gone  " if args.missing
@@ -708,7 +742,14 @@ def main():
               f"the rest are cut by write_tags from your answer.")
         print("  Re-run fingerprint, analyze and intros over the folder after "
               "swapping, so the answer stops applying to a file that no "
-              "longer has the intro.\n")
+              "longer has the intro.")
+        # An `intro=y` disarms itself: it needs a measured length and a stamp
+        # that still matches, and a swapped-in copy has neither. A length you
+        # timed by ear carries no such condition, by design, so it is the one
+        # answer that would be applied a second time to a file already clean.
+        print("  An intro=y stops applying by itself once the file changes. "
+              "A length you typed does not, so change those rows to intro=n "
+              "after swapping or write_tags will cut the song.\n")
     else:
         print(f"\n  better files -> {OUT_DIR}")
         print("  originals untouched. Feed the folder back through run.py "
