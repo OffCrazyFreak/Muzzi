@@ -190,6 +190,73 @@ def why_review(conn, path):
     return " | ".join(parts)
 
 
+LOCAL_SOURCES = ("tags", "filename", "folder")
+
+
+def local_claims(conn, path):
+    """-> what the file itself says, each source spelled out separately.
+
+    `why_review` names families, which is right for catalogues and wrong here:
+    it renders the tags, the filename and the folder as the single word
+    "local", and the one thing #60 asks for is that those three stay
+    inspectable and apart.
+
+    Reads as "tags: X - Y | filename: A - B | folder: NCS Beat", and a
+    disagreement between two of them is a disagreement you can see rather than
+    one averaged away before the sheet was written. It is a column and not a
+    verdict: none of these votes, because the three descend from the same
+    download and agreement between them proves only that it was consistent.
+    """
+    said = {}
+    for field in IDENTITY:
+        for r in evidence.observations(conn, path, field):
+            if r["state"] != evidence.FOUND or not r["value"]:
+                continue
+            if r["source"] in LOCAL_SOURCES:
+                said.setdefault(r["source"], {})[field] = r["value"]
+    # `collection` is not an identity field and has no place in the loop above.
+    # It is here because "which folder did this arrive in" belongs in the same
+    # column as the other two things the file says about itself.
+    for r in evidence.observations(conn, path, "collection"):
+        if r["state"] == evidence.FOUND and r["value"]:
+            said.setdefault(r["source"], {})["collection"] = r["value"]
+
+    parts = []
+    for src in LOCAL_SOURCES:
+        got = said.get(src)
+        if not got:
+            continue
+        if "collection" in got:
+            parts.append(f"{src}: {got['collection']}")
+            continue
+        # An em rule is not available here and a hyphen would be ambiguous
+        # inside names that contain one, so an absent half is spelled out.
+        artist = got.get("artist") or "(no artist)"
+        title = got.get("title") or "(no title)"
+        parts.append(f"{src}: {artist} - {title}")
+    return " | ".join(parts)
+
+
+def local_disagreement(conn, path):
+    """-> [field, ...] where the tags and the filename say different things.
+
+    The reason the column above is worth a person's time. Where these two
+    agree the file is at least self-consistent; where they differ, one of them
+    is wrong and the pipeline has been picking between them silently since
+    `seed_for` was written.
+    """
+    out = []
+    for field in IDENTITY:
+        vals = {}
+        for r in evidence.observations(conn, path, field):
+            if (r["state"] == evidence.FOUND and r["value_norm"]
+                    and r["source"] in ("tags", "filename")):
+                vals[r["source"]] = r["value_norm"]
+        if len(vals) == 2 and len(set(vals.values())) == 2:
+            out.append(field)
+    return out
+
+
 def penalty(conn, path, proposed):
     """-> (multiplier, [reason, ...]) for one track's proposed identity."""
     hits = contested(conn, path, proposed)

@@ -130,6 +130,7 @@ FAMILY = {
     "seed": "local",
     "filename": "local",
     "tags": "local",
+    "folder": "local",
     "human": "human",
 }
 
@@ -429,6 +430,82 @@ def _load(name):
         return None
     with open(p, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+def local_observations(conn, paths, seeds, now=None):
+    """Record what the file itself says, as three observations and not one.
+
+    The tags, the filename and the folder are separate things that happen to
+    live in the same place, and the pipeline has always fused them before
+    anything could look at them: `tagseed.seed_for` returns one artist, one
+    title and one trust label built out of `filename_artist or tag_artist`, so
+    by the time a match is scored there is no way to ask which of the two said
+    what, or whether they ever disagreed. That is the fusion #60 is about.
+
+    They stay separate here, and they are all in the `local` family, so they
+    can be read side by side without any of them corroborating another. That
+    matters more than it sounds: a filename and the tags written by the tool
+    that produced it are the same claim seen twice, and counting it twice is
+    how a wrong download name becomes a confident answer.
+
+    Deliberately narrow about which fields it will take from tags. Only artist
+    and title, because those are the only ones tagseed measured. The tag album
+    on these files is ALWAYS the uploading channel ("IDJVideos.TV", "Blockstar")
+    and never a real album, so recording it as an `album` observation would put
+    a channel name in a field no catalogue is contesting, where it would then
+    win unopposed. Channel and label deserve to be recorded, as provenance and
+    under their own names, and that needs a richer tag cache than exists.
+
+    Nothing here can change an identity. `local` is in confidence.IGNORE_DISSENT,
+    so these observations raise no penalty and cast no vote; they are what the
+    review sheet reads to show you the disagreement rather than average it out.
+
+    -> {"tags": n, "filename": n, "folder": n} observations written.
+    """
+    from pipeline.probe_match import split_name
+    counts = {"tags": 0, "filename": 0, "folder": 0}
+    for path in paths:
+        stem = os.path.splitext(os.path.basename(path))[0]
+
+        # The filename, read as a name and not as a fallback. Both fields go in
+        # even when the parse is only half a guess, because "the filename gave
+        # a title and no artist" is a fact about the row worth seeing.
+        fa, ft = split_name(stem)
+        qk = f"filename:{stem}"
+        for field, value in (("artist", fa), ("title", ft)):
+            if value:
+                record(conn, path, field, "filename", qk, FOUND, value=value,
+                       now=now)
+                counts["filename"] += 1
+
+        # The tags, raw. `tag_artist` and not `artist`: the latter is already
+        # the description or an override where one exists, which are different
+        # sources with their own trust and would be laundered into "the tags
+        # said so" by being recorded under this name.
+        s = (seeds or {}).get(path) or {}
+        raw_artist, raw_title = s.get("tag_artist"), s.get("title")
+        if raw_artist or raw_title:
+            qk = f"tags:{raw_artist}|{raw_title}"
+            for field, value in (("artist", raw_artist), ("title", raw_title)):
+                if value:
+                    record(conn, path, field, "tags", qk, FOUND, value=value,
+                           now=now)
+                    counts["tags"] += 1
+
+        # The folder, as the collection it is and not as identity. Measured
+        # before writing this: all 1723 files here sit exactly one level below
+        # the music root, in five buckets, and three of them ("Music Mine",
+        # "Music Other", "YT Music to download") name nothing at all. The two
+        # that do name something name a label, not an artist or a title, and
+        # #60 is explicit that an NCS-looking folder must not prove an NCS
+        # release. So it is recorded under its own field, where it is a search
+        # trigger and a cohort label and can never be mistaken for a name.
+        folder = os.path.basename(os.path.dirname(path))
+        if folder:
+            record(conn, path, "collection", "folder", f"folder:{folder}",
+                   FOUND, value=folder, now=now)
+            counts["folder"] += 1
+    return counts
 
 
 def backfill(conn, verbose=True):
