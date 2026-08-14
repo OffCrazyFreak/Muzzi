@@ -332,6 +332,68 @@ def lyric_timing(entry, decoded_secs=None, cut=0.0):
     return 1.0 - (drift / MAX_DURATION_DELTA) * (1.0 - LYRIC_TIMING_BAR), None
 
 
+# ------------------------------------------------------- lyrics vs the cut
+#
+# Trimming the end of a file removes audio that was measured as silent. A
+# synced lyric sheet that still has words in there is not a small discrepancy:
+# one of the two is wrong about this recording, and cutting would settle the
+# argument by destroying the evidence.
+
+def tail_conflict(entry, decoded_secs, tail_cut, verified=None,
+                  artist=None, title=None, head_cut=0.0):
+    """-> (safe, reason) for cutting `tail_cut` seconds off this file's end.
+
+    Not "does the sheet look right", which `lyric_text` answers. This asks the
+    narrower question the cut depends on: is anything sung inside the stretch
+    about to be removed.
+
+    Resolved without asking wherever the answer is already known:
+
+      no timed sheet          nothing can contradict the cut
+      last sung line is
+        before the cut        the cut removes silence, as measured
+      the sheet's timings
+        are already refused   write_tags drops them and keeps the words, so
+                              no timestamp survives to be wrong about
+      otherwise               a real contradiction, and one for you
+
+    The last case is the whole point. A sheet whose timings this pipeline
+    trusts, placing words inside audio this pipeline measured as silent, means
+    one of two measurements is wrong, and there is no way to tell which from
+    here. Cutting anyway would be picking the answer that deletes something.
+    """
+    if tail_cut <= 0 or not decoded_secs:
+        return True, None
+    if not isinstance(entry, dict):
+        return True, None
+    from pipeline import lrc
+    sung = lrc.lines(entry.get("synced") or "")
+    if not sung:
+        return True, None
+    # Where the removed stretch begins, on the source's own timeline. A head
+    # trim shifts the sheet later, but it shifts the audio with it, so the two
+    # stay in step and this comparison needs no adjustment.
+    cut_start = decoded_secs - tail_cut
+    last = sung[-1][0]
+    if last < cut_start:
+        return True, None
+    # A sheet whose timings are refused contributes no timestamps to the
+    # output at all: write_tags keeps its words and drops its numbers. There
+    # is nothing left for the cut to contradict.
+    # With the same head cut write_tags judges it against. Asking a different
+    # question here than the one that decides the file's actual timings is how
+    # this ends up believing the numbers were dropped when they were kept, and
+    # cutting on the strength of it.
+    timing, _why = lyric_timing(entry, decoded_secs, head_cut)
+    if timing is not None and timing < LYRIC_TIMING_BAR:
+        return True, "timings already dropped"
+    text, why = lyric_text(entry, verified, artist, title)
+    if text < LYRIC_TEXT_BAR:
+        return True, f"sheet already refused ({why})"
+    return False, (f"a line is sung at {last:.1f}s, inside the {tail_cut:.1f}s "
+                   f"about to be cut from the end")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__,
