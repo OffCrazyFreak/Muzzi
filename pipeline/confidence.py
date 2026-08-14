@@ -91,19 +91,35 @@ def agreement(conn, path, field):
     def rank(v):
         return (evidence.HUMAN in by_value[v], len(by_value[v]), v)
 
-    top = max(by_value, key=rank)
+    ordered = sorted(by_value, key=rank, reverse=True)
+    top = ordered[0]
     agree = by_value[top]
     dissent = set()
     for value, fams in by_value.items():
         if value != top:
             dissent |= fams - agree
     dissent -= IGNORE_DISSENT
+    # The answer that came second, and by how much. Kept because "artist:
+    # musicbrainz, deezer agree" does not say what they were agreeing against,
+    # and a win by one family over another is a different row from a win by
+    # three over nothing even though both read as agreement.
+    #
+    # A value only the ignored families hold is not a runner-up, for the same
+    # reason it is not dissent: `local` is the file's own tags and name, which
+    # is the thing being checked rather than a second opinion on it. Without
+    # this the commonest sentence in the sheet was "you settled it, over
+    # <what the filename said> from local", on 1164 field-instances.
+    runner = next((v for v in ordered[1:]
+                   if by_value[v] - IGNORE_DISSENT), None)
     return {"value": shown[top], "agree": sorted(agree),
             "dissent": sorted(dissent),
             "families": sorted(set().union(*by_value.values())),
             "human": evidence.HUMAN in agree,
             "audio": any(r["source"] in evidence.AUDIO_DERIVED
-                         for r in rows if r["value_norm"] == top)}
+                         for r in rows if r["value_norm"] == top),
+            "runner_up": shown[runner] if runner else None,
+            "runner_up_families": sorted(by_value[runner]) if runner else [],
+            "margin": (len(agree) - len(by_value[runner])) if runner else None}
 
 
 def contested(conn, path, proposed):
@@ -164,6 +180,40 @@ def checked(conn, path, field):
             "sources": sorted({r["source"] for r in rows})}
 
 
+def beat(conn, path, field):
+    """-> a phrase saying what the winning value beat, and how.
+
+    #60 asks for why the winner beat the runner-up, and there are two honest
+    answers, so it says which:
+
+      you settled it     a human answer outranks every catalogue by
+                         construction, so the count did not decide it
+      N families to M    an actual vote, with the losing value named
+
+    **Empty when nothing came second**, which is most of the library: measured
+    over both identity fields on every track, 2213 field-instances had one
+    value and no contest against 69 that had a real vote. Saying "nothing else
+    was offered" on all 2213 would put a clause on every row to serve 3% of
+    them, and the existing text already carries it, because a field only one
+    family answered lists one family.
+
+    Values are shown as they are stored, unquoted, like `local_claims` shows
+    them. `repr` would be the obvious choice and prints `Du\x9ako Lokin` for
+    the mojibake this library is full of, escaping the very bytes the reviewer
+    is being asked to look at.
+    """
+    got = agreement(conn, path, field)
+    if not got or not got["runner_up"]:
+        return ""
+    if got["human"]:
+        return (f"{field}: you settled it, over \"{got['runner_up']}\" "
+                f"from {', '.join(got['runner_up_families'])}")
+    n, m = len(got["agree"]), len(got["runner_up_families"])
+    how = "beat" if n > m else "tied with, and sorted above"
+    return (f"{field}: {n} famil{'y' if n == 1 else 'ies'} {how} {m} "
+            f"for \"{got['runner_up']}\"")
+
+
 def why_review(conn, path):
     """-> a sentence saying what was asked about this track's identity.
 
@@ -172,6 +222,10 @@ def why_review(conn, path):
     "3" is not an answer to it. Empty when the store knows nothing, which is
     itself readable in the sheet as a blank cell next to a row that has no
     corroboration at all.
+
+    Each field also says what its value beat. Without that, a row that had one
+    answer and a row that survived a three-to-two vote both read as "deezer,
+    musicbrainz agree", and those are not the same row to be asked about.
     """
     parts = []
     for field in IDENTITY:
@@ -185,6 +239,9 @@ def why_review(conn, path):
             said.append(f"{', '.join(got['dissent'])} disagree")
         if got["silent"]:
             said.append(f"no answer from {', '.join(got['silent'])}")
+        won = beat(conn, path, field)
+        if won:
+            said.append(won.split(": ", 1)[1])
         if said:
             parts.append(f"{field}: " + "; ".join(said))
     return " | ".join(parts)
