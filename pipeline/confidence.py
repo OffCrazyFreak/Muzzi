@@ -422,20 +422,26 @@ def head_conflict(entry, decoded_secs, intro_cut, offset, verified=None,
     sung = lrc.lines(entry.get("synced") or "")
     if not sung:
         return True, None
-    first = sung[0][0]
-    if first >= intro_cut:
-        return True, None
-    # The sheet lags the audio by roughly the bumper, so it is written for the
-    # clean master and the cut is what aligns them. Half the cut is the bar
-    # because the run undershoots the boundary and the alignment is measured
-    # to within a beat; nothing here is precise to a tenth of a second.
-    #
     # No measurement is not a conflict, and this is the branch that says so.
     # Blocking on the absence of one would refuse the cut on every file
     # lyric_align could not check, which is most of them, and refuse it in
     # favour of nothing: there is no second measurement to prefer, only an
     # answer given by ear and a sheet whose timeline is unknown.
-    if offset is None or offset >= intro_cut / 2:
+    if offset is None:
+        return True, None
+    # Where that line falls in THIS rip, which is the only timeline the cut
+    # happens on. lyric_align defines a positive offset as the audio lagging
+    # the sheet, so a sheet timed to the clean master reports roughly the
+    # bumper and its first line clears the cut by construction: that is the
+    # ordinary case, and it needs no special allowance to pass.
+    #
+    # Comparing the sheet's own number against a source-time length was the
+    # same timeline confusion in miniature, and the allowance that papered
+    # over it let a half-aligned sheet through. A 7s bumper with the sheet
+    # measured 5s out put the first line at 6s in the rip, inside the cut,
+    # and `offset >= intro_cut / 2` called that safe.
+    first = sung[0][0] + offset
+    if first >= intro_cut:
         return True, None
     # Same two escapes as the tail, judged with the same head cut write_tags
     # judges by: a sheet whose numbers or words are already refused

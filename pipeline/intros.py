@@ -96,6 +96,11 @@ SNAP = 1.5
 # The gap between a bumper and the first bar is a duck, not digital silence.
 SILENCE_DB = -45.0
 MIN_GAP = 0.12
+# How far past the band the scan runs, so that the window's own edge can never
+# be mistaken for a boundary, and how close to that edge an event has to sit
+# before it is read as the artifact it is. See song_start().
+EDGE_PAD = 1.0
+EDGE_EPS = 0.05
 # Nothing longer than this is cut, whatever anyone answers. The longest
 # confirmed opening here is 7.5s; a number an order of magnitude past that is
 # a typo, and a typo that deletes the first verse.
@@ -143,12 +148,25 @@ def song_start(path, nominal):
     anything here has.
     """
     from pipeline import silence
-    err = silence.ffmpeg(["-t", f"{nominal + SNAP:.2f}", "-i", path, "-af",
+    # Scanned past the far edge of the band, not up to it. `silencedetect`
+    # closes any run still open when the input ends, so a window that stops at
+    # `nominal + SNAP` reports a silence_end there whenever the file is quiet
+    # at that moment, and that number is where we stopped looking rather than
+    # where the bumper handed over. It sat exactly on the band's edge, so it
+    # was always accepted and always won: on this library it fired on 13 of
+    # the 106 grouped files, moving every one of them by the full 1.5s.
+    #
+    # This is #62's scan-window bug at the other end of the file, which is why
+    # the guard is here twice: the window is widened so a real boundary can
+    # never coincide with it, and an event that lands on it anyway is dropped
+    # rather than trusted.
+    window = nominal + SNAP + EDGE_PAD
+    err = silence.ffmpeg(["-t", f"{window:.2f}", "-i", path, "-af",
                           f"silencedetect=noise={SILENCE_DB}dB:d={MIN_GAP}"])
     if not err:
         return nominal, False
     near = [e for e in (float(m.group(1)) for m in _SIL_END.finditer(err))
-            if abs(e - nominal) <= SNAP]
+            if abs(e - nominal) <= SNAP and window - e > EDGE_EPS]
     if not near:
         return nominal, False
     return round(min(near, key=lambda e: abs(e - nominal)), 3), True
