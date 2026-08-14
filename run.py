@@ -219,6 +219,14 @@ def main():
         # Everything downstream needs a fingerprint, including dedupe.
         ("serial", [stage("fingerprint", *args.root, *jflag)]),
 
+        # Before identify, which reads its cache through tagseed.seed_for.
+        # It was never run from here, so the cache only changed when somebody
+        # remembered to run it by hand, and nothing noticed when it did not:
+        # measured, it held 319 entries for files no longer in the library and
+        # missed 5 that carry usable tags, whose embedded artist and title
+        # were therefore never consulted. Tag reads only, so it costs seconds.
+        ("serial", [stage("tagseed", *args.root)]),
+
         ("parallel", [
             [stage("identify", *jflag), stage("textsearch")],
             # analyze BEFORE dedupe, not after. dedupe picks the copy to keep

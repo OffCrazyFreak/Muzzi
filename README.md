@@ -246,15 +246,16 @@ Then `verify` reads the output back and reports what still needs you.
 
 ```
 1.  fingerprint
-2.  identify -> textsearch          ║  analyze -> silence -> dedupe
-3.  review
-4.  from_filename -> review
-5.  hints_resolve -> review
-6.  webmatch -> review
-7.  cascade -> fetch_art -> ...     ║  lyrics_fetch -> ... -> lyric_align
-8.  review
-9.  artist_names -> origin -> lastfm_tags -> dedupe_names -> yt_links
-10. write_tags -> export -> verify
+2.  tagseed
+3.  identify -> textsearch          ║  analyze -> silence -> dedupe
+4.  review
+5.  from_filename -> review
+6.  hints_resolve -> review
+7.  webmatch -> review
+8.  cascade -> fetch_art -> ...     ║  lyrics_fetch -> ... -> lyric_align
+9.  review
+10. artist_names -> origin -> lastfm_tags -> dedupe_names -> yt_links
+11. write_tags -> export -> verify
 ```
 
 The `║` pairs are run concurrently: one chain is network-bound and the other is
@@ -268,7 +269,7 @@ seeing what the previous one failed on:
 | `fingerprint` | Chromaprint acoustic fingerprint per file |
 | `identify` | fingerprint -> AcoustID -> MusicBrainz. Authoritative, but weak on Balkan music |
 | `textsearch` | search MusicBrainz and Discogs by name |
-| `tagseed` | scores *where* a name came from, so a "Lyrics Channel HD" artist tag doesn't outrank a filename |
+| `tagseed` | scores *where* a name came from, so a "Lyrics Channel HD" artist tag doesn't outrank a filename. Incremental on size and mtime, so a file whose tags were rewritten is re-read and one that was not is not |
 | `from_filename` | believe the filename, then ask MusicBrainz to confirm it |
 | `webmatch` | YouTube Music, Deezer, iTunes, YouTube, SoundCloud |
 | `hints_resolve` | turns links you paste into metadata, via yt-dlp. A wholly decorative bracketed group is removed whole, so `(Lyrics/Tekst)` cannot leave its slash behind, while `AC/DC` and `(Payphone Parody)` are kept. An upload year goes only when the title carried decoration too, so `Sarvagon 2015` survives, and a `\| NCS - Copyright Free Music` slogan is dropped. A pasted search is answered too, but its first result is scored below the auto bar and lands in review, because nobody picked it. A quoted left side followed by a description (`"This is my Biome" - A Minecraft Parody of ...`) is a title and a description, not an artist and a title, so the quoted part becomes the title and the artist comes from the uploader or from you |
