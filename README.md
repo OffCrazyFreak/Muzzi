@@ -166,6 +166,28 @@ Every stage is idempotent -- it reads its own cache and does only what's
 missing. Interrupting and re-running costs nothing, which is also how you add
 music later: point it at the new folder and it processes only what's new.
 
+```bash
+run.py DIR --rounds 4             # repeat until a pass learns nothing
+```
+
+Every fact learned is a better search key than the one that found it, and some
+of them only exist after the pass that would have used them: `artist_names`
+settles a canonical spelling *after* the searches ran, and searching for
+`Joško Čagalj Jole` as `Jole` is a different question. `--rounds` repeats the pass until
+one of them adds nothing, printing what each round changed. Repeating is cheap
+because every stage is cache-backed, so a round with nothing to do is a round
+of stages each saying so. `fingerprint`, `analyze` and `silence` run once
+whatever it says: they read the waveform, and nothing discovered downstream
+can change what they measure.
+
+It is off by default, and worth being honest about why. Measured on this
+library, a second round gains **nothing**: only 27 artists have a canonical
+spelling that differs from the one searched with, only 4 of their tracks are
+still missing anything the cascade supplies, and re-asking with the better
+name found nothing new for any of them. That is what a library already
+enriched over many runs looks like. The flag is for the next import, where
+most tracks are unresolved and the feedback has somewhere to go.
+
 Expect roughly 2-3 hours for ~2000 files on a normal desktop, most of it in
 `verify_lyrics` (Whisper) and the 1-request-per-second MusicBrainz limit.
 
