@@ -150,8 +150,14 @@ def checked(conn, path, field):
     """
     rows = evidence.observations(conn, path, field)
     got = agreement(conn, path, field)
-    silent = sorted({r["source"] for r in rows
-                     if r["state"] != evidence.FOUND or not r["value_norm"]})
+    # Silent means the source never answered, not that one of its answers was
+    # empty. A source is asked once per question, so a catalogue that missed on
+    # the filename and hit on the corrected name has two rows and has plainly
+    # answered; reporting "no answer from musicbrainz" next to MusicBrainz's
+    # answer is the kind of line that costs the whole column its credibility.
+    answered = {r["source"] for r in rows
+                if r["state"] == evidence.FOUND and r["value_norm"]}
+    silent = sorted({r["source"] for r in rows} - answered)
     return {"agree": (got or {}).get("agree", []),
             "dissent": (got or {}).get("dissent", []),
             "silent": silent,

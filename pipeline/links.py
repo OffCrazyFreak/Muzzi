@@ -91,38 +91,49 @@ def search(source, artist, title):
     return template.format(q=urllib.parse.quote(q))
 
 
-def records(values):
-    """-> [(label, url), ...] for the identifiers in a {field: value} mapping.
+def records(found):
+    """-> [(label, url), ...] for a {field: {value: [source, ...]}} mapping.
+
+    Every distinct value gets a link, not the first one found. Two sources
+    naming two different recordings is the disagreement, and picking one of
+    them to link to would hide it behind a page that looks authoritative:
+    silently dropping the loser is the habit this whole store exists to break.
+    When a field has more than one, each label names the source that gave it,
+    so the row says which record came from where instead of offering two links
+    with the same name.
 
     Sorted by label so two runs over the same track produce the same dossier.
     A row that reorders every run is a row that cannot be diffed.
     """
     out = []
     for field, (label, template) in RECORD.items():
-        value = values.get(field)
-        if value:
-            out.append((label, template.format(
+        values = found.get(field) or {}
+        for value, sources in values.items():
+            name = label if len(values) == 1 else f"{label} via {sources[0]}"
+            out.append((name, template.format(
                 urllib.parse.quote(str(value), safe=""))))
     return sorted(out)
 
 
 def identifiers(conn, path):
-    """-> {field: value} for every identifier the store holds for one track.
+    """-> {field: {value: [source, ...]}}: every identifier held for a track.
 
     Whoever answered. An id is a fact about the record it names, so which
     source found it does not change where it points, and the one that did find
-    it is often not the one being questioned.
+    it is often not the one being questioned. The sources are kept anyway,
+    because when two of them name different records that is the only thing
+    that tells them apart.
     """
     from pipeline import evidence
     marks = ",".join("?" * len(RECORD))
     rows = conn.execute(
-        f"SELECT field, value FROM observation WHERE track_path=? "
+        f"SELECT field, value, source FROM observation WHERE track_path=? "
         f"AND state=? AND field IN ({marks}) AND value IS NOT NULL "
-        f"ORDER BY field, source",
+        f"ORDER BY field, value, source",
         (path, evidence.FOUND, *RECORD)).fetchall()
     out = {}
-    for field, value in rows:
-        out.setdefault(field, value)
+    for field, value, source in rows:
+        out.setdefault(field, {}).setdefault(value, []).append(source)
     return out
 
 
