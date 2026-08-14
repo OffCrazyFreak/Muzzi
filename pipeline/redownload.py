@@ -8,7 +8,8 @@ sources existed, or transcodes of transcodes.
 Nothing is replaced. Candidates are downloaded into `redownloaded/`, measured,
 and kept only when they clear every one of these:
 
-  * the spectral cutoff is at least MIN_GAIN Hz higher than the original
+  * the spectral cutoff is at least MIN_GAIN Hz higher than the original,
+    unless the video came from a link you gave for that exact file
   * the duration is within tolerance of the original, so a radio edit or a
     live version cannot quietly take a studio track's place
   * the file decodes at all
@@ -405,8 +406,22 @@ def judge(res, an, args):
                 "new_cutoff": round(new_cut), "path": dst,
                 "was": None if same_path else src}
 
-    if new_cut < old_cut + args.min_gain:
+    # The bandwidth bar exists to stop a search result trading a good file for
+    # a worse one nobody asked for. It does not apply to a link you gave for
+    # this exact file, for the same reason the length check does not: you are
+    # not asking for more bandwidth, you are asking for a different copy. The
+    # rips being replaced carry label intros the linked release does not, and
+    # measured here 25 of 28 requested refetches were refused on bandwidth
+    # while being the recording actually wanted.
+    #
+    # This can lower quality, and does: one candidate measures 15848Hz against
+    # an 18583Hz original. That is the trade the owner asked for, so it is
+    # recorded on the entry rather than hidden, and `lost_hz` is what a later
+    # run can sort by to find anything worth a second look.
+    if res.get("how") != YOURS and new_cut < old_cut + args.min_gain:
         return drop("not better", f"{new_cut:.0f}Hz vs {old_cut:.0f}Hz")
+
+    lost = max(0.0, old_cut - new_cut) if (old_cut and new_cut) else 0.0
 
     # Keep the source folder layout so the result can be fed straight back in.
     src = res["path"]
@@ -420,6 +435,7 @@ def judge(res, an, args):
     return {"file": res["file"], "status": "kept", "video_id": res["video_id"],
             "how": res["how"], "old_cutoff": old_cut,
             "new_cutoff": round(new_cut), "gain": round(new_cut - old_cut),
+            "lost_hz": round(lost) or None,
             "path": dst}
 
 
