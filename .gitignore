@@ -69,3 +69,10 @@ __pycache__/
 *.jpeg
 *.png
 *.webp
+
+# Scratch: measurement scripts and stage logs written while working.
+# Three of these reached main through "git add -A" before this existed.
+scratch_*.py
+run_stage.py
+patch_*.py
+*.log
