@@ -131,6 +131,65 @@ def contested(conn, path, proposed):
     return out
 
 
+def checked(conn, path, field):
+    """-> {'agree', 'dissent', 'silent', 'sources'}: who was asked, who spoke.
+
+    The exhaustion proof behind a review row. `agree` and `dissent` come from
+    `agreement`, so they are counted in families; `silent` names the sources
+    that were asked and had nothing, and `sources` every source asked at all.
+
+    Silent sources are named individually rather than by family because the
+    question they answer is operational, not evidential: "has anyone tried
+    Genius for this" is about Genius, and folding it into a family would say
+    a lyrics site was consulted when a lyrics site was not.
+
+    A source that was never asked appears nowhere here. Absence in the store
+    means the question was not put, which is a different thing from an answer
+    of no, and the whole point of the eight states is that the two do not
+    collapse into each other.
+    """
+    rows = evidence.observations(conn, path, field)
+    got = agreement(conn, path, field)
+    # Silent means the source never answered, not that one of its answers was
+    # empty. A source is asked once per question, so a catalogue that missed on
+    # the filename and hit on the corrected name has two rows and has plainly
+    # answered; reporting "no answer from musicbrainz" next to MusicBrainz's
+    # answer is the kind of line that costs the whole column its credibility.
+    answered = {r["source"] for r in rows
+                if r["state"] == evidence.FOUND and r["value_norm"]}
+    silent = sorted({r["source"] for r in rows} - answered)
+    return {"agree": (got or {}).get("agree", []),
+            "dissent": (got or {}).get("dissent", []),
+            "silent": silent,
+            "sources": sorted({r["source"] for r in rows})}
+
+
+def why_review(conn, path):
+    """-> a sentence saying what was asked about this track's identity.
+
+    Written for the person opening the spreadsheet, so it names families and
+    sources rather than counting them: "which catalogues" is the question, and
+    "3" is not an answer to it. Empty when the store knows nothing, which is
+    itself readable in the sheet as a blank cell next to a row that has no
+    corroboration at all.
+    """
+    parts = []
+    for field in IDENTITY:
+        got = checked(conn, path, field)
+        if not got["sources"]:
+            continue
+        said = []
+        if got["agree"]:
+            said.append(f"{', '.join(got['agree'])} agree")
+        if got["dissent"]:
+            said.append(f"{', '.join(got['dissent'])} disagree")
+        if got["silent"]:
+            said.append(f"no answer from {', '.join(got['silent'])}")
+        if said:
+            parts.append(f"{field}: " + "; ".join(said))
+    return " | ".join(parts)
+
+
 def penalty(conn, path, proposed):
     """-> (multiplier, [reason, ...]) for one track's proposed identity."""
     hits = contested(conn, path, proposed)

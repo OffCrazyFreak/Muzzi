@@ -26,7 +26,7 @@ from collections import defaultdict
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
-from pipeline import evidence  # noqa: E402
+from pipeline import evidence, links  # noqa: E402
 
 # Long values are the ones worth truncating hardest: a lyric sheet printed in
 # full buries the one line that says where it came from.
@@ -148,6 +148,15 @@ def main():
 
     print("  * evidence from the audio itself, independent of every "
           "catalogue\n")
+
+    # The same records the review sheets link to, so the answer to "where did
+    # this come from" is one command rather than a spreadsheet.
+    found_links = links.records(links.identifiers(conn, path))
+    if found_links:
+        print("  records\n")
+        for label, url in found_links:
+            print(f"    {label:24s} {url}")
+        print()
     return 0
 
 
