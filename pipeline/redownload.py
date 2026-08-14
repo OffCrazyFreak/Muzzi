@@ -34,8 +34,17 @@ Downloads run in batches so a long run can be watched, stopped and resumed.
 to it and that is a better measurement of "this sounds wrong" than a spectral
 cutoff. Measured here, 28 files were asked for and several of them sit well
 above the bar, one at 18.6 kHz, so nothing selecting on bandwidth was ever
-going to fetch them. Every other check still applies: a candidate that is a
-different length, or does not decode, is deleted and the original stands.
+going to fetch them.
+
+The length check does not apply to a link you gave for that exact file, and
+the reason is the point of giving it: the copy on disk is the one that is
+wrong. These downloads are YouTube rips carrying label intros, and the clean
+release you linked is shorter by exactly that intro. Measured, 13 of 28
+requested refetches were refused on drifts of 10 to 40 seconds, which is the
+size of an intro and not of a different song. The check stays everywhere else,
+because everywhere else the video came from a search and the length is the
+only thing between "improve quality" and "change the song". A candidate that
+does not decode is still deleted, whoever named it.
 
 `--missing` answers a different question with the same machinery: a source
 file that has been deleted keeps erroring in write_tags on every run, and
@@ -53,6 +62,7 @@ Usage:
   redownload.py --min-cutoff 15500   # which files count as needing it
   redownload.py --missing --dry-run  # the sources that are gone
   redownload.py --requested          # the ones you asked for by name
+  redownload.py --requested --retry --cookies /tmp/yt.txt
 """
 import argparse
 import json
@@ -84,6 +94,11 @@ MIN_GAIN_HZ = 1200
 # Seconds the new file may differ from the old before it is a different cut.
 MAX_DRIFT = 8.0
 MIN_BYTES = 200_000
+
+# The one source that is your answer rather than an inference, and the only
+# one exempt from the length check. Named so the exemption is greppable and
+# cannot drift apart from the string find_source returns.
+YOURS = "the link you gave"
 
 
 def _done_key(path, args):
@@ -144,7 +159,7 @@ def find_source(row, facts, hints, link=None):
     """
     vid = video_id(link or "")
     if vid:
-        return vid, "the link you gave"
+        return vid, YOURS
     vid = facts.get("video_id")
     if vid:
         return vid, "cascade art track"
@@ -313,7 +328,19 @@ def judge(res, an, args):
 
     if not new_cut:
         return drop("rejected", "candidate did not decode")
-    if old_dur and new_dur and abs(new_dur - old_dur) > args.max_drift:
+    # A link you gave for this exact file is not checked against the file's
+    # length, and the reason is the whole point of giving it: the copy on disk
+    # is the one that is wrong. These downloads are YouTube rips carrying label
+    # intros, and the clean release you linked is shorter by exactly that
+    # intro. Measured, 13 of 28 requested refetches were refused on drifts of
+    # 10 to 40 seconds, which is the size of an intro, not of a different song.
+    #
+    # The check stays everywhere else, because everywhere else the video was
+    # chosen by a search and the length is the only thing standing between
+    # "improve quality" and "change the song". Here you already did that
+    # checking by looking at it.
+    if res.get("how") != YOURS and old_dur and new_dur \
+            and abs(new_dur - old_dur) > args.max_drift:
         return drop("rejected",
                     f"different length ({new_dur:.0f}s vs {old_dur:.0f}s)")
 
@@ -384,6 +411,10 @@ def main():
                     help="fetch the rows whose source file is gone, back to "
                          "the path it was at, instead of the rows that "
                          "measure badly")
+    ap.add_argument("--retry", action="store_true",
+                    help="ignore the record of what has already been "
+                         "attempted, so a run blocked by 403 or by a rule "
+                         "that has since changed can be repeated")
     ap.add_argument("--requested", action="store_true",
                     help="fetch the rows you asked for by writing "
                          "'redownload' in a review sheet, whatever they "
@@ -396,6 +427,14 @@ def main():
     cascade = json.load(open(CASCADE)) if os.path.exists(CASCADE) else {}
     hints = json.load(open(YT_HINTS)) if os.path.exists(YT_HINTS) else {}
     done = json.load(open(REPORT)) if os.path.exists(REPORT) else {}
+    if args.retry:
+        # Only this mode's keys. Clearing the whole record would re-attempt
+        # 628 files nobody asked about, and the modes are keyed apart exactly
+        # so they can be repeated independently.
+        prefix = _done_key("", args)
+        skipped = {k for k in done if k.startswith(prefix)} if prefix else set()
+        print(f"  --retry: forgetting {len(skipped)} earlier attempts")
+        done = {k: v for k, v in done.items() if k not in skipped}
 
     # Every answer you have given about a file, so a request can be honoured
     # and so the exact link you gave for it beats a search.
