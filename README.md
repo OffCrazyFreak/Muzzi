@@ -302,7 +302,7 @@ can't be wrong about which file it's describing:
 
 | Stage | Does |
 |---|---|
-| `redownload` | re-fetches files whose audio is worse than their container claims. Downloads into `redownloaded/`, keeps a candidate only if it is measurably better AND the same length, so "improve quality" can never quietly become "change the song" |
+| `redownload` | re-fetches files whose audio is worse than their container claims, or that you asked for with `--requested`. Downloads into `redownloaded/`, keeps a candidate only if it is measurably better AND the same length, so "improve quality" can never quietly become "change the song". A link you gave for that exact file is used ahead of any search |
 | `art_missing` | cover art for tracks with no album behind them -- bootleg remixes, regional uploads. Deezer/iTunes track search, then the YouTube thumbnail, then the artist photo |
 
 **Deciding and writing:**
@@ -665,6 +665,15 @@ a one-word instruction still became a title: 28 tracks shipped as
 anyone to see. Bare text is now a note whatever its length. Across every
 hint ever given here, all 31 bare hints were notes and none was a title. To
 set a title on purpose, write `title: Beograd`.
+
+Being a note is not the same as being ignored, and `redownload` is the case
+that proved it. Written 28 times, it was correctly refused as a title and then
+nothing else claimed it, so it sat in `hints.tsv` describing an instruction no
+stage acted on. It is now its own answer: `redownload.py --requested` fetches
+exactly those files, with no bandwidth bar, because you listened to them and
+that is a better measurement of "this sounds wrong" than a spectral cutoff.
+Several of the 28 measure well above the bar, one at 18.6 kHz, so the
+quality-driven selection was never going to reach them.
 
 **The duplicate keeper inherits the group's best identity.** The keeper is
 chosen on audio quality, which is independent of how well a track is

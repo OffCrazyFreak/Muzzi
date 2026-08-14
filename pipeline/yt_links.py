@@ -529,6 +529,15 @@ def main():
                 yes = best["video_id"] if best else None
                 confirmed_from["re-derived, the sheet was already rebuilt"
                                if yes else "no candidate left to confirm"] += 1
+        if yes:
+            # Write the confirmation back as the URL it resolved to, replacing
+            # the bare "y". A "y" is only meaningful next to the question that
+            # asked it; the URL is meaningful anywhere, and everything
+            # downstream already understands one. hints_resolve reads it as a
+            # link you gave and fetches the video's metadata from it,
+            # redownload reads it as the source to fetch audio from, and this
+            # stage reads it as origin evidence. None of that reached a "y".
+            answers[r["file"]] = WATCH.format(yes)
         rec, reason = decide(path, cands, r, secs,
                              refused=r["file"] in refused, confirmed=yes)
         if rec:
