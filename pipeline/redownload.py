@@ -376,7 +376,7 @@ def judge(res, an, args):
     # chosen by a search and the length is the only thing standing between
     # "improve quality" and "change the song". Here you already did that
     # checking by looking at it.
-    if res.get("how") != YOURS and old_dur and new_dur \
+    if not args.requested and res.get("how") != YOURS and old_dur and new_dur \
             and abs(new_dur - old_dur) > args.max_drift:
         return drop("rejected",
                     f"different length ({new_dur:.0f}s vs {old_dur:.0f}s)")
@@ -418,7 +418,13 @@ def judge(res, an, args):
     # an 18583Hz original. That is the trade the owner asked for, so it is
     # recorded on the entry rather than hidden, and `lost_hz` is what a later
     # run can sort by to find anything worth a second look.
-    if res.get("how") != YOURS and new_cut < old_cut + args.min_gain:
+    # Asking for a file by name means replace it, whatever it measures. The
+    # owner's rule, in their words: "if i said redownload, always redownload,
+    # no matter the quality". A y confirming a link is a different answer and
+    # never queues a download at all, which is why --requested selects only
+    # files whose hint says so.
+    if not args.requested and res.get("how") != YOURS \
+            and new_cut < old_cut + args.min_gain:
         return drop("not better", f"{new_cut:.0f}Hz vs {old_cut:.0f}Hz")
 
     lost = max(0.0, old_cut - new_cut) if (old_cut and new_cut) else 0.0
