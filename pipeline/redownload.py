@@ -95,6 +95,20 @@ MIN_GAIN_HZ = 1200
 MAX_DRIFT = 8.0
 MIN_BYTES = 200_000
 
+# Where a JavaScript runtime might live when it is not on PATH. YouTube now
+# requires one for ordinary videos, not only age-restricted ones: without it
+# the signature and "n" challenges go unsolved and yt-dlp is offered nothing
+# but images, which it reports as "Requested format is not available". That
+# error names the format and not the cause, which is why this cost a run of 28
+# downloads to diagnose. nvm installs node outside PATH for a non-login shell,
+# which is exactly the shell a stage runs in.
+JS_RUNTIME_GLOBS = (
+    os.path.expanduser("~/.local/share/nvm/*/bin"),
+    os.path.expanduser("~/.nvm/versions/node/*/bin"),
+    os.path.expanduser("~/.bun/bin"),
+    "/usr/local/bin",
+)
+
 # The one source that is your answer rather than an inference, and the only
 # one exempt from the length check. Named so the exemption is greppable and
 # cannot drift apart from the string find_source returns.
@@ -112,6 +126,24 @@ def _done_key(path, args):
     if getattr(args, "requested", False):
         return f"requested:{path}"
     return f"missing:{path}" if getattr(args, "missing", False) else path
+
+
+def js_runtime():
+    """-> (name, PATH to run yt-dlp with), or (None, None) if none is found.
+
+    Prefers whatever is already on PATH, so a system install is used as-is and
+    the globs below are a fallback rather than a preference.
+    """
+    import glob
+    for name in ("node", "deno", "bun"):
+        if shutil.which(name):
+            return name, os.environ.get("PATH", "")
+    for pattern in JS_RUNTIME_GLOBS:
+        for d in sorted(glob.glob(pattern), reverse=True):
+            for name in ("node", "deno", "bun"):
+                if os.path.exists(os.path.join(d, name)):
+                    return name, d + os.pathsep + os.environ.get("PATH", "")
+    return None, None
 
 
 def _ytmusic():
@@ -219,6 +251,10 @@ def download(vid, dest_stem, cookies=None):
                 os.remove(jar)
             jar = None
     auth = ["--cookies", jar] if jar else []
+    # Without this yt-dlp solves no challenge and is offered only images.
+    runtime, path = js_runtime()
+    js = ["--js-runtimes", runtime] if runtime else []
+    env = dict(os.environ, PATH=path) if path else None
     try:
         p = subprocess.run(
             # m4a on purpose, not "bestaudio". YouTube's best audio is Opus in
@@ -235,9 +271,9 @@ def download(vid, dest_stem, cookies=None):
             ["yt-dlp", "--no-warnings", "--no-playlist", "--embed-metadata",
              "-f",
              "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio", "-o", tmpl,
-             *auth,
+             *auth, *js,
              f"https://music.youtube.com/watch?v={vid}"],
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True, timeout=300, env=env)
     except Exception as e:
         return None, str(e)[:60]
     finally:
