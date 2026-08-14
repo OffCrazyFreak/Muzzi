@@ -622,15 +622,19 @@ def attach_dossier(rows, db=None):
             continue
         try:
             artist, title = _search_terms(r)
-            r["checked"] = confidence.why_review(conn, path)
+            # Both, then assign. Setting `checked` first and letting the
+            # dossier throw would leave a row saying what was asked with no
+            # way to go and look, which reads as "there is nowhere to check".
+            checked = confidence.why_review(conn, path)
             # Every site, not only the ones that were asked. Offering the
             # asked-only subset was the first shape of this and it read
             # backwards: a row is in review precisely because what was asked
             # did not settle it, so the sites worth naming are the ones nobody
             # has tried. Which ones were asked is the `checked` column's job.
-            r["links"] = links.dossier(conn, path, artist, title, links.SEARCH)
+            found = links.dossier(conn, path, artist, title, links.SEARCH)
         except Exception:
             continue
+        r["checked"], r["links"] = checked, found
     return rows
 
 

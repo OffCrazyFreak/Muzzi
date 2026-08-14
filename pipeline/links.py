@@ -77,18 +77,29 @@ def query(artist, title):
     Artist and title, nothing else. Adding the album narrows a search that is
     already narrow enough and fails outright when the album is the thing that
     is wrong.
+
+    A slash becomes a space. Half these templates put the query in the path,
+    where an unescaped `/` is a different path and an escaped one is a 404:
+    measured, `deezer.com/search/AC%2FDC...` answers 404 and Deezer has no
+    query-parameter form that works instead. A slash carries no meaning in a
+    search box in either case, and every one of these engines tokenises, so
+    "AC DC" finds AC/DC.
     """
-    words = " ".join(x for x in (artist, title) if x).strip()
-    return words or None
+    words = " ".join(x for x in (artist, title) if x).replace("/", " ")
+    return " ".join(words.split()) or None
 
 
 def search(source, artist, title):
-    """-> a URL onto this source's own search, or None."""
+    """-> a URL onto this source's own search, or None.
+
+    `safe=""` so nothing structural survives into a path-style template. The
+    slash is already gone by here; this covers `?`, `#` and the rest.
+    """
     template = SEARCH.get(source)
     q = query(artist, title)
     if not template or not q:
         return None
-    return template.format(q=urllib.parse.quote(q))
+    return template.format(q=urllib.parse.quote(q, safe=""))
 
 
 def records(found):
