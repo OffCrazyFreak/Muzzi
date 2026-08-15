@@ -1129,8 +1129,11 @@ zero results when it is throttling, AcoustID returns 200 with `"status":
 page.
 
 Every source the pipeline queries has a probe: AcoustID, MusicBrainz,
-Discogs, Deezer, Deezer lyrics, iTunes, YouTube Music, SoundCloud, Genius,
-LRCLIB, Last.fm, Cover Art Archive and NCS.
+Discogs, Deezer, Deezer lyrics, iTunes, YouTube Music, YouTube, SoundCloud,
+Genius, LRCLIB, Last.fm, Cover Art Archive and NCS. YouTube Music and plain
+YouTube are two of them, not one: the first is an API client and the second
+is yt-dlp driving the web extractor, and a change that breaks the extractor
+leaves the Music probe answering happily.
 
 Three things follow, and they are what the check is for:
 

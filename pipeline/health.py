@@ -423,14 +423,13 @@ def _lastfm(s):
     return OK, "answered"
 
 
-def _soundcloud(_s):
-    """SoundCloud is reached through yt-dlp's scsearch, so the probe is too.
+def _ytdlp_search(prefix, what):
+    """-> (state, detail) for a source reached through yt-dlp's search.
 
-    webmatch asks it last, only for tracks nothing else corroborated, which is
-    exactly when a silent failure is invisible: the track was already
-    unmatched, so "SoundCloud found nothing" and "SoundCloud was not reachable"
-    produce the same row. Measured, it corroborated 1 of 236 tracks, and a
-    source that rare has to be known to be working when it says nothing.
+    Shared by YouTube and SoundCloud because they fail the same way and the
+    check is the same question: did a search that certainly has a hit come
+    back with one. yt-dlp exits 0 with empty stdout when an extractor breaks,
+    so the answer is what decides, not the exit code.
     """
     import shutil
     import subprocess
@@ -439,7 +438,7 @@ def _soundcloud(_s):
     try:
         p = subprocess.run(
             ["yt-dlp", "--skip-download", "--no-warnings", "--flat-playlist",
-             "--dump-json", f"scsearch1:{PROBE_ARTIST} {PROBE_TITLE}"],
+             "--dump-json", f"{prefix}1:{PROBE_ARTIST} {PROBE_TITLE}"],
             capture_output=True, text=True, timeout=60)
     except Exception as e:
         return DOWN, f"{type(e).__name__}: {str(e)[:50]}"
@@ -450,7 +449,32 @@ def _soundcloud(_s):
             continue
         if d.get("title"):
             return OK, "answered"
-    return DOWN, (p.stderr or "no result for a track it certainly has")[:70]
+    return DOWN, (p.stderr or f"no {what} result for a track it certainly "
+                              f"has")[:70]
+
+
+def _youtube(_s):
+    """Plain YouTube search, which is a different source from YouTube Music.
+
+    webmatch asks both and they break separately: YouTube Music is an API
+    client, this is yt-dlp driving the web extractor, and a YouTube change
+    that breaks the extractor leaves the Music probe answering happily. 41
+    tracks here were matched "youtube only" and 1 as a "youtube art track",
+    so it carries real weight and had nothing watching it.
+    """
+    return _ytdlp_search("ytsearch", "youtube")
+
+
+def _soundcloud(_s):
+    """SoundCloud is reached through yt-dlp's scsearch, so the probe is too.
+
+    webmatch asks it last, only for tracks nothing else corroborated, which is
+    exactly when a silent failure is invisible: the track was already
+    unmatched, so "SoundCloud found nothing" and "SoundCloud was not reachable"
+    produce the same row. Measured, it corroborated 1 of 236 tracks, and a
+    source that rare has to be known to be working when it says nothing.
+    """
+    return _ytdlp_search("scsearch", "soundcloud")
 
 
 def _ncs(s):
@@ -483,6 +507,9 @@ PROBES = {
     "acoustid": _acoustid,
     "discogs": _discogs,
     "lastfm": _lastfm,
+    # Plain YouTube is not YouTube Music. webmatch asks both, they break
+    # separately, and only one of them was watched.
+    "youtube": _youtube,
     "soundcloud": _soundcloud,
 }
 
