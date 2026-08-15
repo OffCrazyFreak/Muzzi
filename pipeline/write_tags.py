@@ -660,6 +660,29 @@ def digest(fields):
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:16]
 
 
+def disc_number(value):
+    """-> a disc number worth writing, or None.
+
+    Discs are counted from 1, so 0, a negative and a fraction are all a
+    catalogue saying something it does not mean. A blank field beats a wrong
+    one, and `int()` alone would not catch any of them: it truncates 1.9 to 1
+    and passes -1 straight through, and "0" is a non-empty string so a plain
+    truthiness test lets that past as well.
+
+    Every one of the 1592 disc numbers in this library is already a positive
+    int, so this changes nothing today. It is here so the MP4 and MP3 paths
+    cannot disagree about what counts as writable, which is the bug that put
+    this function in the file.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        n = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
 def write_generic(dst, fields, art_path, lyrics):
     """FLAC / M4A / OGG. ID3 frames do not exist there, so map onto the
     container's own scheme. Roughly 5% of a mixed library is not MP3, and
@@ -730,14 +753,12 @@ def write_generic(dst, fields, art_path, lyrics):
                               int(fields.get("total_tracks") or 0))]
             except (TypeError, ValueError):
                 pass
-        if fields.get("discnumber"):
+        disc = disc_number(fields.get("discnumber"))
+        if disc:
             # Second slot is the disc total, which nothing here knows. 0 is
             # how MP4 spells "unset" for it, and is what mutagen writes back
             # for a file that only states the disc.
-            try:
-                f["disk"] = [(int(fields["discnumber"]), 0)]
-            except (TypeError, ValueError):
-                pass
+            f["disk"] = [(disc, 0)]
         for k, v in fields.items():
             if k in m or k in ("tracknumber", "total_tracks", "discnumber"):
                 continue
@@ -845,8 +866,9 @@ def _id3_identity(t, txxx, ident):
                 else str(ident["track_number"])])])
         else:
             t.delall("TRCK")
-        if ident.get("disc_number"):
-            t.setall("TPOS", [TPOS(encoding=3, text=[str(ident["disc_number"])])])
+        disc = disc_number(ident.get("disc_number"))
+        if disc:
+            t.setall("TPOS", [TPOS(encoding=3, text=[str(disc)])])
         else:
             t.delall("TPOS")
 
