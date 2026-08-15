@@ -1124,8 +1124,13 @@ Each source is asked one question whose answer is already known, once every
 ten minutes, shared across the eight stages of a run. The probe checks the
 **answer**, not the status code, because a status code proves nothing here:
 Deezer returns 200 with an error object in the body, iTunes returns 200 with
-zero results when it is throttling, and a captive portal returns 200 with a
-login page.
+zero results when it is throttling, AcoustID returns 200 with `"status":
+"error"` for a rejected key, and a captive portal returns 200 with a login
+page.
+
+Every source the pipeline queries has a probe: AcoustID, MusicBrainz,
+Discogs, Deezer, Deezer lyrics, iTunes, YouTube Music, SoundCloud, Genius,
+LRCLIB, Last.fm, Cover Art Archive and NCS.
 
 Three things follow, and they are what the check is for:
 
