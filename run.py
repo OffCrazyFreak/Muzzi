@@ -148,6 +148,13 @@ def cache_state():
                 data = _json.load(fh)
         except (OSError, ValueError):
             continue
+        # Most of these are {track: facts}, so their length is the number of
+        # tracks something was learned about. `ncs.json` is not: it holds a
+        # catalogue and the matches drawn from it, so its length is 2 for ever
+        # and the round loop would read "learned nothing" whatever happened.
+        # The matches are the part that grows as the names improve.
+        if isinstance(data, dict) and "matched" in data:
+            data = data["matched"]
         out[name] = len(data)
     return out
 

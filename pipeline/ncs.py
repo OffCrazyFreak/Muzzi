@@ -160,6 +160,14 @@ def refresh(session=None, cap=PAGE_CAP, verbose=True):
             continue
         new = 0
         for artist, title, tid, versions, genre in got:
+            # A record with no genre is not evidence about a genre, and this
+            # catalogue exists for nothing else. 13 of the 1968 are like that.
+            # Admitting them would let one match a file and then hand
+            # `evidence.record` a FOUND with an empty value, which raises, so
+            # the stage would die on whichever library first happened to own
+            # one of the 13.
+            if not genre.strip():
+                continue
             if tid and tid not in cat:
                 cat[tid] = {"artist": html.unescape(artist),
                             "title": html.unescape(title),
@@ -322,7 +330,10 @@ def match_library(rows=None, cat=None, conn=None):
             continue
         got = match(r.get("proposed_artist"), r.get("proposed_title"),
                     index=idx)
-        if got:
+        # Belt to refresh()'s braces, because a cache written before that
+        # filter existed still holds the genreless records and this is the
+        # place that would turn one into an invalid observation.
+        if got and (got.get("genre") or "").strip():
             out[path] = got
     if conn is not None:
         from pipeline import evidence
@@ -371,14 +382,22 @@ def main():
     args = ap.parse_args()
 
     cat = load()
-    if args.refresh:
+    # Fetched on the first --apply as well as on an explicit --refresh, so a
+    # fresh clone running the pipeline gets a catalogue instead of a stage
+    # that fails. It is about a hundred requests, once: every later run reads
+    # the cache, and re-paging every round would be the wrong trade entirely.
+    if args.refresh or (args.apply and not cat):
         print("\n  paging the NCS catalogue")
         cat = refresh()
         print(f"    {len(cat)} tracks")
 
     if not cat:
-        print("\n  nothing cached yet. Run ncs.py --refresh\n")
-        return 1
+        # Still nothing, so the site could not be reached. Not an error for
+        # the pipeline: NCS names a genre for 6% of this library and nothing
+        # else depends on it, so a run without it is a run with one source
+        # down, which is a thing health.py already knows how to say.
+        print("\n  no NCS catalogue, and it could not be fetched\n")
+        return 0 if args.apply else 1
 
     if args.match:
         print(f"\n  {match(*args.match, cat=cat) or 'no match'}\n")
