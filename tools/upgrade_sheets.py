@@ -39,15 +39,33 @@ from pipeline import confidence, evidence, links, review  # noqa: E402
 AFTER = "why"
 BLOCK = ["checked", "on the file", "look here"]
 
+# How far into a row the header search expands a repeat run. The header is a
+# handful of columns; the padding after it can be thousands, and the search
+# only has to reach `file`.
+HEADER_SCAN = 64
 
-def cells_of(row):
+
+def cells_of(row, upto=None):
     """-> the row's cells, with repeat-compressed runs expanded.
 
     A cell carrying `number-columns-repeated` stands for several columns at
     once, so inserting by position without expanding first would put the new
     columns somewhere else entirely on exactly the rows that use it.
+
+    Expanded only as far as `upto`, which is the last index anything will be
+    inserted at. Past that the run is kept compressed, with its count reduced
+    by however much was expanded off the front, so the row still describes the
+    same columns. A spreadsheet pads its rows to the sheet width, and that
+    padding is routinely 1024 or 16384 columns: expanding it in full would
+    build a million elements to insert three, and the previous `min(rep, 64)`
+    avoided that by silently dropping the rest of the run, which is a rewrite
+    of the document rather than a reading of it.
+
+    Each expanded cell is a full clone. Building a fresh `TableCell` with only
+    `valuetype` was losing every other attribute, and these sheets carry
+    `value` on 34 of their cells, so a repeated numeric cell would have kept
+    its type and lost its number.
     """
-    from odf.table import TableCell
     out = []
     for tc in list(row.childNodes):
         if tc.qname[1] != "table-cell":
@@ -56,13 +74,38 @@ def cells_of(row):
         if rep <= 1:
             out.append(tc)
             continue
+        # How many of this run have to become real cells for the inserts to
+        # land where they are meant to. The rest stays as one cell.
+        need = rep if upto is None else max(0, min(rep, upto - len(out)))
         row.removeChild(tc)
-        for _ in range(min(rep, 64)):
-            copy = TableCell(valuetype=tc.getAttribute("valuetype") or "string")
-            for child in tc.childNodes:
-                copy.addElement(child.cloneNode(True)
-                                if hasattr(child, "cloneNode") else child)
-            out.append(copy)
+        for _ in range(need):
+            out.append(_clone_cell(tc))
+        if rep > need:
+            rest = _clone_cell(tc)
+            rest.setAttribute("numbercolumnsrepeated", str(rep - need))
+            out.append(rest)
+        continue
+    return out
+
+
+def _clone_cell(tc):
+    """-> a copy of one cell carrying every attribute except the repeat count.
+
+    The repeat is dropped because the copy stands for exactly one column; the
+    caller puts it back on the one cell that still stands for several.
+
+    `copy.deepcopy`, and not the `cloneNode` this used to reach for. odfpy
+    elements have no `cloneNode`, so that branch never ran and the fallback
+    beside it handed the ORIGINAL child to `addElement`, which re-parents
+    rather than copies. Expanding a run of five therefore moved the content
+    into the first copy and left the other four blank, and emptied the cell it
+    was copying from on the way. deepcopy leaves the original alone.
+    """
+    import copy as _copy
+    out = _copy.deepcopy(tc)
+    for (ns, name) in list((out.attributes or {})):
+        if name == "number-columns-repeated":
+            del out.attributes[(ns, name)]
     return out
 
 
@@ -127,7 +170,7 @@ def upgrade(path, conn, paths_by_name, dry=False):
 
     header = None
     for row in rows:
-        names = [text_of(c) for c in cells_of(row)]
+        names = [text_of(c) for c in cells_of(row, upto=HEADER_SCAN)]
         if "file" in names:
             header = names
             break
@@ -139,11 +182,15 @@ def upgrade(path, conn, paths_by_name, dry=False):
         return 0, f"no {AFTER!r} column to insert after"
     plan = plan_for(header)
     fi = header.index("file")
+    # The furthest any insert reaches, so a run of padding past it is
+    # never expanded.
+    upto = max([at for at, _ in plan] + [len(header)]) + len(plan) + 1
 
     touched = 0
     seen_header = False
+    failed = []
     for row in rows:
-        cells = cells_of(row)
+        cells = cells_of(row, upto=upto)
         names = [text_of(c) for c in cells]
         if not seen_header and "file" in names:
             seen_header = True
@@ -178,12 +225,24 @@ def upgrade(path, conn, paths_by_name, dry=False):
                     "look here": links.dossier(conn, track, artist, title,
                                                links.SEARCH),
                 }
-            except Exception:
-                values = {}
+            except Exception as e:
+                # A lookup that threw is not a row with no evidence, and
+                # writing it as empty cells says it is. The header would
+                # then be present, the next run would answer "already
+                # upgraded", and the blanks would be permanent. Nothing
+                # is saved unless every row was answered.
+                failed.append((name, f"{type(e).__name__}: {str(e)[:60]}"))
         insert_all(cells, plan, values.get)
         rebuild(row, cells)
         touched += 1
 
+    if failed:
+        # Refused whole rather than half applied. This tool exists so a
+        # part-answered queue keeps its answers, and a sheet that gained
+        # the columns but not their contents can never gain them later.
+        first = "; ".join(f"{n}: {w}" for n, w in failed[:3])
+        return 0, f"{len(failed)} rows could not be looked up, "\
+                  f"nothing written ({first})"
     if dry:
         return touched, "would upgrade"
     stamp = time.strftime("%Y%m%d-%H%M%S")
