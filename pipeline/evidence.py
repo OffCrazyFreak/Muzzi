@@ -437,7 +437,7 @@ def _load(name):
 # once so the delete above cannot fall behind the writes below: a source added
 # to the writes and not to this tuple would keep its superseded rows for ever,
 # which is the exact defect the delete exists to stop.
-LOCAL_WRITTEN = ("tags", "filename", "folder")
+LOCAL_WRITTEN = ("tags", "band", "filename", "folder")
 
 
 def local_observations(conn, paths, seeds, now=None):
