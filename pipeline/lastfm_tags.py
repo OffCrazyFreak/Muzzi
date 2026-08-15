@@ -93,8 +93,15 @@ def load_cache():
                 cache = json.load(fh)
         except (OSError, ValueError):
             cache = {}
-    cache.setdefault("artist", {})
-    cache.setdefault("track", {})
+    # A file holding valid JSON that is not an object parses fine and then
+    # raises on .setdefault, which would escape this module and take down a
+    # stage rather than reading as "no cache". Same hazard health.secret()
+    # names for secrets.json, and a truncated write is how it happens here.
+    if not isinstance(cache, dict):
+        cache = {}
+    for level in ("artist", "track"):
+        if not isinstance(cache.get(level), dict):
+            cache[level] = {}
     return cache
 
 
