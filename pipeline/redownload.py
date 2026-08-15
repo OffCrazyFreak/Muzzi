@@ -116,14 +116,47 @@ JS_RUNTIME_GLOBS = (
 YOURS = "the link you gave"
 
 
+# The prefixed namespaces in the shared report. The default mode has none, so
+# it is identified by carrying none of these.
+NAMESPACES = ("intros:", "requested:", "missing:")
+
+
+def mine(done, args):
+    """-> the keys in the shared report that belong to the mode being run.
+
+    One report file holds four namespaces, so "this mode's attempts" is a
+    question with a real answer and both callers need the same one. The
+    default mode is the unprefixed namespace, which is whatever carries none
+    of the three prefixes rather than everything.
+
+    Reading it as "no prefix, so no keys" was how `--retry` came to do nothing
+    at all in the default mode: it printed that it had forgotten 0 attempts
+    and skipped every file it had already tried, which is the opposite of what
+    the flag is for and is silent about it.
+    """
+    prefix = _done_key("", args)
+    if prefix:
+        return {k for k in done if k.startswith(prefix)}
+    return {k for k in done if not k.startswith(NAMESPACES)}
+
+
 def _done_key(path, args):
     """Where an attempt is recorded in the shared report.
 
-    The two modes ask different questions about the same path, so they cannot
+    The modes ask different questions about the same path, so they cannot
     share a completion key: a file this tool once judged for its bandwidth is
     exactly the file that may later go missing, and it would then be skipped
     forever as "already attempted".
+
+    Tested in the same order main() builds its queue in, and the two are only
+    ever going to agree by being written to. Disagreeing was a real defect:
+    the queue preferred --intros while this preferred --requested, so a run
+    with both recorded `requested:` for work the intro queue would look for
+    under `intros:` and hand back the same file for ever. main() now refuses
+    the combination outright, which makes this belt to that braces.
     """
+    if getattr(args, "intros", False):
+        return f"intros:{path}"
     if getattr(args, "requested", False):
         return f"requested:{path}"
     return f"missing:{path}" if getattr(args, "missing", False) else path
@@ -376,10 +409,25 @@ def judge(res, an, args):
     # chosen by a search and the length is the only thing standing between
     # "improve quality" and "change the song". Here you already did that
     # checking by looking at it.
+    # What a replacement for THIS file may measure. The length on disk, always,
+    # and for a file with a confirmed bumper also that length minus the bumper:
+    # a clean copy of a track carrying a 7s label intro is 7s shorter, and
+    # refusing it for being 7s shorter would refuse exactly what --intros is
+    # looking for.
+    #
+    # Two accepted lengths and not one moved. Subtracting unconditionally, as
+    # this first did, re-centres the window in every mode, so an ordinary
+    # quality run would start rejecting the same-length candidate that still
+    # carries the bumper, which is the usual case and the one it exists to
+    # improve. Neither length is relaxed: a copy 40s short is still a different
+    # recording and the tolerance that catches it is unchanged.
+    bumper = (getattr(args, "intro_cuts", {}) or {}).get(res["path"], 0.0)
+    allowed = [old_dur] + ([old_dur - bumper] if bumper else [])
     if not args.requested and res.get("how") != YOURS and old_dur and new_dur \
-            and abs(new_dur - old_dur) > args.max_drift:
+            and min(abs(new_dur - w) for w in allowed) > args.max_drift:
         return drop("rejected",
-                    f"different length ({new_dur:.0f}s vs {old_dur:.0f}s)")
+                    f"different length ({new_dur:.0f}s vs "
+                    + " or ".join(f"{w:.0f}s" for w in allowed) + ")")
 
     if args.missing:
         # Restoring a source that was deleted, not improving one that is still
@@ -477,7 +525,16 @@ def main():
                     help="fetch the rows you asked for by writing "
                          "'redownload' in a review sheet, whatever they "
                          "measure")
+    ap.add_argument("--intros", action="store_true",
+                    help="look for a clean copy of every file you confirmed "
+                         "opens with a label intro, so it need not be cut")
     args = ap.parse_args()
+    # Each mode has its own queue, its own bandwidth rule and its own
+    # completion key, so "both" has no meaning that is not one of them
+    # silently winning. Said out loud rather than resolved by precedence.
+    picked = [n for n in ("intros", "requested", "missing") if getattr(args, n)]
+    if len(picked) > 1:
+        ap.error("pick one mode: " + ", ".join("--" + n for n in picked))
 
     rows = {r["path"]: r for r in json.load(open(REVIEW))}
     analysis = {v["path"]: v for v in json.load(open(ANALYSIS)).values()
@@ -489,8 +546,7 @@ def main():
         # Only this mode's keys. Clearing the whole record would re-attempt
         # 628 files nobody asked about, and the modes are keyed apart exactly
         # so they can be repeated independently.
-        prefix = _done_key("", args)
-        skipped = {k for k in done if k.startswith(prefix)} if prefix else set()
+        skipped = mine(done, args)
         print(f"  --retry: forgetting {len(skipped)} earlier attempts")
         done = {k: v for k, v in done.items() if k not in skipped}
 
@@ -506,8 +562,27 @@ def main():
         elif kind == "url":
             links.setdefault(name, hint)
 
+    # The bumpers you confirmed, and how long each one runs. Read whether or
+    # not --intros was passed: judge() needs it to know what length a clean
+    # copy of one of these files should be, and a mode flag is not a good
+    # reason for two runs to measure the same file differently.
+    from pipeline import intros as intros_mod
+    args.intro_cuts = intros_mod.cuts(list(rows))
+
     todo = []
-    if args.requested:
+    if args.intros:
+        # Cutting is lossless: ffmpeg copies the stream and the rest of the
+        # file is bit-identical. So a clean copy has to be at least as good as
+        # the one on disk to be worth taking, and the bandwidth bar below is
+        # left in place rather than waived the way --requested waives it. A
+        # worse-sounding release with no bumper is not an improvement on a
+        # good rip with its bumper removed.
+        for path, _row in rows.items():
+            if path not in args.intro_cuts or f"intros:{path}" in done:
+                continue
+            todo.append((path, rows[path], analysis.get(path) or {}))
+        todo.sort(key=lambda x: x[0])
+    elif args.requested:
         # No bandwidth bar. You listened to it, which is a better measurement
         # of "this sounds wrong" than a spectral cutoff, and a file can be a
         # bad rip at any bitrate.
@@ -556,17 +631,27 @@ def main():
 
     args.common_root = common_root(list(analysis))
 
+    # This mode's attempts, not every attempt this tool has ever made. The
+    # report is one file holding four namespaces, so a bare len() told an
+    # --intros run it had already attempted the 628 files a quality sweep
+    # looked at. The default mode is the unprefixed namespace, so it is
+    # whatever carries none of the three prefixes.
+    tried = len(mine(done, args))
+
     if not todo:
-        left = ("nothing left that you asked for" if args.requested
+        left = ("no confirmed intro left to find a clean copy of"
+                if args.intros
+                else "nothing left that you asked for" if args.requested
                 else "no source file is missing" if args.missing
                 else f"nothing below {args.min_cutoff:.0f}Hz left")
-        print(f"  {left} ({len(done)} done)\n")
+        print(f"  {left} ({tried} done)\n")
         return 0
 
-    what = ("files you asked to be fetched again" if args.requested
+    what = ("files open with a confirmed intro" if args.intros
+            else "files you asked to be fetched again" if args.requested
             else "source files are missing" if args.missing
             else f"files measure below {args.min_cutoff:.0f}Hz")
-    print(f"\n  {len(todo)} {what} ({len(done)} already attempted)")
+    print(f"\n  {len(todo)} {what} ({tried} already attempted)")
     if args.dry_run:
         for path, row, an in todo[:40]:
             mark = ("  gone  " if args.missing
@@ -667,6 +752,20 @@ def main():
                   f"YouTube serves m4a. Those rows still read as missing.")
         print("  Re-run fingerprint and analyze over the folder, then review, "
               "before write_tags --prune.\n")
+    elif args.intros:
+        print(f"\n  clean copies -> {OUT_DIR}")
+        print(f"  {stats['kept']} files need no cut once you swap them in; "
+              f"the rest are cut by write_tags from your answer.")
+        print("  Re-run fingerprint, analyze and intros over the folder after "
+              "swapping, so the answer stops applying to a file that no "
+              "longer has the intro.")
+        # An `intro=y` disarms itself: it needs a measured length and a stamp
+        # that still matches, and a swapped-in copy has neither. A length you
+        # timed by ear carries no such condition, by design, so it is the one
+        # answer that would be applied a second time to a file already clean.
+        print("  An intro=y stops applying by itself once the file changes. "
+              "A length you typed does not, so change those rows to intro=n "
+              "after swapping or write_tags will cut the song.\n")
     else:
         print(f"\n  better files -> {OUT_DIR}")
         print("  originals untouched. Feed the folder back through run.py "

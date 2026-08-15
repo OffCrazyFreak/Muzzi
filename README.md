@@ -281,7 +281,7 @@ can't be wrong about which file it's describing:
 |---|---|
 | `analyze` | BPM (three engines), musical key -> Camelot, loudness and true peak (ffmpeg EBU R128), danceability, spectral cutoff |
 | `dedupe` | files whose fingerprints match: the same recording twice |
-| `intros` | which files open with the same recording as other files, and for how long. Proposes only: nothing is cut without an answer, because eight NCS tracks share an opening beat and none of them is a bumper |
+| `intros` | which files open with the same recording as other files, for how long, and where the song actually starts. Proposes only: nothing is cut without an answer, because eight NCS tracks share an opening beat and none of them is a bumper |
 | `silence` | how much dead air each file opens and ends with, and whether either is safe to cut. Measures the *source*, so the figures never change and trimming can never happen twice |
 | `verify_lyrics` | Whisper transcribes the audio and compares it to the fetched lyrics -- independent proof the file is the song we think, plus language detection. Each score records a digest of the sheet it judged, so a track whose lyrics later change is re-scored and one whose lyrics did not is still skipped |
 | `lyric_align` | how far each synced lyric sheet is out of step with its audio, by locating the opening lines in a word-timestamped transcript |
@@ -336,7 +336,7 @@ there is nothing left to answer.
 | `2 - confirm the name.ods` | a name was proposed but the filename disagrees | `y` or `n` |
 | `3 - check the rest.ods` | everything else, least confident first | anything |
 | `4 - trim and lyric timing.ods` | timing, not identity: a long quiet opening, a lyric sheet timed for another edit, or a tail cut a sheet contradicts | `trim=y` or `trim=n` |
-| `5 - shared intros.ods` | the file opens with the same recording as other files, often a label bumper | `intro=y` or `intro=n` |
+| `5 - shared intros.ods` | the file opens with the same recording as other files, often a label bumper | `intro=y`, `intro=n`, or `intro=<seconds>` |
 | `6 - confirm the youtube link.ods` | a video was found but not confidently enough to write it | a URL, `y`, or `n` |
 
 Sheets 1 to 5 are written by `review`, the last by `yt_links`, and its number is
@@ -543,6 +543,57 @@ nothing left to contradict. What it cannot settle goes to sheet 4 naming the
 line and the second, where `trim=y` cuts it anyway and `trim=n` keeps the file
 whole for good. Cutting the end moves no timestamp, so unlike the head this
 needs no `.lrc` re-timing.
+
+**A label bumper is cut from an answer, never from a measurement.** `intros`
+finds files that open with the same recording as other files and proposes a
+length; sheet 5 asks; `intro=y` cuts that one file, `intro=n` keeps it, and
+`intro=7.5` cuts the length you timed yourself, on any file whether or not the
+detector grouped it. Three things have to agree before a second comes off: a
+shared opening was measured, you confirmed it, and the file on disk is still
+the one that was measured, so an answer cannot survive onto a copy fetched
+since. The length is not the shared run itself: that run stops at the last
+fingerprint item both files agree on and so undershoots the boundary, and the
+cut is snapped to the silent gap the bumper hands over across where there is
+one. What comes off is stamped as `MUZZI_TRIM_INTRO` beside the total, so
+answering `n` later re-makes the file whole rather than leaving a one-way door.
+
+The same lyric veto guards the head, turned around. Sheets come from LRCLIB
+and Deezer, timed to the commercial master, so a rip carrying a bumper lags its
+own sheet by exactly the bumper and removing it is what puts the two back in
+step: every timestamp lands after the cut and there is nothing to ask. The
+conflict is a sheet already in step with the rip that still has words inside
+the opening about to go, and the cut is refused there. An offset that was never
+measured is not a conflict, because there is no second measurement to prefer.
+
+The two answers do not expire the same way, which matters after a swap. An
+`intro=y` disarms itself: it needs the measured length and a file whose size
+and mtime still match the measurement, so a copy fetched since is not cut. A
+length you typed has no such condition, deliberately, because it is the escape
+hatch for openings the detector never grouped and there is nothing to match it
+against. Change those rows to `intro=n` once a clean copy is in.
+
+Cutting is lossless (`-c copy`, so the rest of the file is bit-identical), and
+`redownload.py --intros` still looks for a clean copy first, which is the
+better artifact where one exists. It accepts that copy at either the original
+length or the original minus the bumper, and keeps the bandwidth bar the
+`redownload` hint waives: a worse-sounding release with no intro is not an
+improvement on a good rip with its intro removed.
+
+`MUZZI_TRIM_INTRO` records how much of the head cut was a confirmed bumper: a
+`TXXX` frame on ID3, a `----:com.apple.iTunes` freeform atom on MP4, written
+only when there is a cut and deleted when there is not.
+
+| player | what it does with `MUZZI_TRIM_INTRO` |
+|---|---|
+| Namida | ignores it, and plays a file that starts on the song |
+| Samsung Music | ignores it, and reads the shifted `.lrc` sidecar as before |
+| generic Android | ignores it |
+
+Namida, Samsung Music and generic Android players all ignore it, so nothing
+here depends on any of them reading it. It exists so a later run can tell a
+file deliberately cut from a file that was always short. What those three see
+instead is the audio: a stream copy that starts on the song, with the embedded
+sheet and the sidecar shifted together by the same amount.
 
 **BPM.** Three engines vote (Essentia RhythmExtractor2013 multifeature, degara,
 PercivalBpmEstimator). Validated 20/20 within 4% against published values for

@@ -28,6 +28,7 @@ from pipeline.fingerprint import likely_balkan  # noqa: E402
 from pipeline.probe_match import split_name  # noqa: E402,F401
 from pipeline import tagseed  # noqa: E402
 from pipeline import bpm_overrides  # noqa: E402
+from pipeline import intros  # noqa: E402
 
 IDENT = os.path.join(HERE, "cache", "identity.json")
 ANALYSIS = os.path.join(HERE, "cache", "analysis.json")
@@ -68,10 +69,13 @@ SHEETS = [
      "eight NCS tracks here share up to 8.5s of opening and none of them has "
      "a bumper. So nothing is cut until you say so. Play the first few "
      "seconds, then in `hint` type intro=y to cut that file's opening or "
-     "intro=n to keep it. Answering one file of a group settles only that "
-     "file, because some songs by the same artists carry the bumper and some "
-     "do not. Each row carries its own measured length, since the same bumper "
-     "runs 8.4s on one file and 3.0s on another."),
+     "intro=n to keep it. If the length in the row is wrong, type the one you "
+     "timed instead: intro=7.5. Answering one file of a group settles only "
+     "that file, because some songs by the same artists carry the bumper and "
+     "some do not. Each row carries its own measured length, since the same "
+     "bumper runs 8.4s on one file and 3.0s on another. Lyrics move with the "
+     "cut, and a clean copy is fetched in preference to cutting where one "
+     "can be found."),
 ]
 # Sheets whose rows describe the audio rather than the identity, and which
 # therefore ignore the auto-accept tier. A track can be identified with total
@@ -362,7 +366,14 @@ def intro_rows(rows):
     by_path = {r["path"]: r for r in rows if r.get("path")}
     out = []
     for n, cluster in enumerate(found, 1):
-        members = [f for f in cluster["files"] if f["file"] not in answered]
+        # An answered file drops out, except one whose audio has changed since
+        # you answered. That answer was about a file that is no longer there,
+        # `intros.cuts()` refuses to act on it, and if the row did not come
+        # back the refusal would be silent and there would be no way to
+        # correct it: the sheet is a view and hints.tsv is the record, so a
+        # question the record cannot answer has to be asked again.
+        members = [f for f in cluster["files"]
+                   if f["file"] not in answered or f.get("changed_since_answered")]
         if not members:
             continue
         others = len(cluster["files"]) - 1
@@ -370,13 +381,32 @@ def intro_rows(rows):
             r = by_path.get(f["path"])
             if not r:
                 continue
+            # What would actually come off, which is not the same number as
+            # the shared run: the run undershoots the boundary, so intros.py
+            # snaps the cut to the gap the bumper hands over across where
+            # there is one. Say the number that will be used, not the one it
+            # was derived from.
+            #
+            # Only when there is one. `cuts()` accepts a measured length and
+            # nothing else, so offering the run as a fallback would promise a
+            # cut that the answer cannot deliver: on a cache written before
+            # propose() existed, every row would read "intro=y cuts 6.1s" and
+            # every `y` would silently do nothing. Say so instead.
+            secs = f.get("intro_cut")
             row = dict(r)
+            how = (f"intro=y cuts {secs:.1f}s" if secs else
+                   "intro=y needs a length: re-run intros.py first")
+            again = ("this file has changed since you answered, so the old "
+                     "answer is not being used; " if
+                     f.get("changed_since_answered") else "")
             row["reasons"] = [
+                f"{again}"
                 f"opens with the same {f['shared_secs']:.1f}s as {others} "
                 f"other file{'s' if others != 1 else ''} (group {n}); "
-                f"intro=y cuts it, intro=n keeps it"]
+                f"{how}, intro=n keeps it, "
+                f"intro=<seconds> cuts the length you time yourself"]
             row["intro_group"] = n
-            row["intro_secs"] = f["shared_secs"]
+            row["intro_secs"] = round(secs, 2) if secs else ""
             out.append(row)
     return out
 
@@ -908,8 +938,21 @@ def parse_hint(hint):
     # pipeline measured; intro is about a recording only a person can
     # recognise, which is why nothing is cut without this.
     m = _INTRO_HINT.match(h)
-    if m and m.group(1).lower() in _YES | _NO:
-        return "intro", m.group(1).lower() in _YES
+    if m:
+        val = m.group(1).lower()
+        if val in _YES | _NO:
+            return "intro", val in _YES
+        # "intro=7.5": the length you timed, in seconds. The fingerprint
+        # locates the boundary to about a quarter of a second and undershoots
+        # it by construction, so a number someone actually listened for beats
+        # it. Without this branch it fell through the `in _YES` test and read
+        # as "keep", which is the wrong way for a typo to fail quietly.
+        try:
+            secs = float(val.replace(",", "."))
+        except ValueError:
+            secs = None
+        if secs is not None and 0 < secs <= intros.MAX_CUT:
+            return "intro", secs
 
     # "artist: X; title: Y" is as natural to type as "artist=X", and a hint
     # that is ignored because of the separator is worse than no hint at all.
