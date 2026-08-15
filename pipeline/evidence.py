@@ -432,6 +432,13 @@ def _load(name):
         return json.load(fh)
 
 
+# The sources local_observations owns outright and rewrites in full. Named
+# once so the delete above cannot fall behind the writes below: a source added
+# to the writes and not to this tuple would keep its superseded rows for ever,
+# which is the exact defect the delete exists to stop.
+LOCAL_WRITTEN = ("tags", "filename", "folder")
+
+
 def local_observations(conn, paths, seeds, now=None):
     """Record what the file itself says, as three observations and not one.
 
@@ -465,6 +472,28 @@ def local_observations(conn, paths, seeds, now=None):
     from pipeline.probe_match import split_name
     counts = {"tags": 0, "filename": 0, "folder": 0}
     for path in paths:
+        # Everything this file said last time, cleared before it says it
+        # again. `query_key` carries the value for these sources, which is
+        # right for a catalogue (a miss belongs to the query, so a better
+        # query is a new row) and wrong for a file: "what do this file's tags
+        # say" is ONE question whose answer changes when the file is retagged.
+        # Keyed on the answer, a rewritten tag left the old reading sitting
+        # beside the new one as a current FOUND, so `local_claims` showed
+        # whichever it reached first and `local_disagreement` reported a file
+        # as permanently disagreeing with itself.
+        #
+        # Scoped to the local sources on purpose. A catalogue's old answers
+        # are evidence and are kept for ever; a superseded reading of a file
+        # that is sitting right there is not evidence of anything.
+        # Its own transaction, opened the way record() opens one. A bare
+        # execute starts an implicit transaction that record()'s explicit
+        # BEGIN IMMEDIATE then cannot open inside.
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "DELETE FROM observation WHERE track_path = ? AND source IN "
+                f"({','.join('?' * len(LOCAL_WRITTEN))})",
+                (path, *LOCAL_WRITTEN))
         stem = os.path.splitext(os.path.basename(path))[0]
 
         # The filename, read as a name and not as a fallback. Both fields go in
