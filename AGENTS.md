@@ -11,22 +11,15 @@ reasoning, `CONTRIBUTING.md` for the contributor-facing version of these rules.
 
 ## Before acting
 
-These four are standing rules, not preferences for one task. They are here
-because they had to be said out loud on three consecutive days.
-
-1. **Search online first, every time.** Before choosing a tool, format,
-   library, API or approach, look it up. Docs change and assumptions about
-   what a service supports go stale. This covers artwork, downloads, tag
-   formats, player behaviour, everything.
-2. **Report before you change.** Investigate, present what you found, then
-   wait. "Look into it and report back" means do not touch the files yet.
-3. **Ask instead of deciding.** A question costs a minute; guessing wrong
-   costs hours. Never decide alone on: which copy of a song to keep, what
-   counts as the same artist, or anything that deletes.
-4. **Do the work yourself.** No subagents unless asked for them.
-
-Ask means ask: do not work around the question or narrow the task to avoid it.
-If you cannot stop, do the parts that do not depend on the answer, then ask.
+- **Look it up first.** Before choosing a tool, format, library, API or
+  approach, read the current docs. What a service supports goes stale, and
+  that covers artwork, downloads, tag formats and player behaviour.
+- **Never decide alone on anything irreversible.** Which copy of a song to
+  keep, what counts as the same artist, anything that deletes. Ask, and wait
+  for the answer.
+- **"Report back" means report back.** When I ask you to investigate, present
+  what you found and stop there. Any other task, run to the end.
+- **Do the work yourself.** No subagents unless asked for them.
 
 ## Target players
 
@@ -109,7 +102,8 @@ different rule when the code is ambiguous.
 
 - Adding a dependency, an API, or a new pipeline stage.
 - Changing a tag's format, or what a stage writes to `cache/`.
-- Anything with two plausible readings. Ask before you edit, do not pick one.
+- A reading of the task that would lead to materially different work. Routine
+  judgment calls are yours to make.
 
 ## Commands
 
@@ -188,39 +182,17 @@ stage, and never run it against the real library.
 
 **Count artifacts, not exit codes.** Most defects that reached this library
 were silent: nothing errored, a file was simply absent, doubled or mis-tagged.
-"It ran without errors" is worth nothing here. Count the files, the tags, the
-playlist entries.
+Count the files, the tags, the playlist entries. There is no test suite, so a
+green `ruff` never implies behaviour works. Say which commands you ran and
+which you did not.
 
-**Check the checker before you trust it.** Two verification scripts here were
-themselves wrong, which is worse than not verifying: a passing check reads as
-proof. There is no test suite. Say which commands you ran, which you did not,
-and what is therefore still unproven. A green `ruff` never implies behaviour
-works.
-
-### Baseline before, diff after
-
-One track is not evidence. Verify against a sample, never against the track
-that prompted the fix. Run these with `./.venv/bin/python`, like every stage.
-
-1. `tools/sample.py --issue SLUG` freezes a deterministic 10%. Add what the
-   issue is about: `--add "artist:Rasta"`.
-2. Write the tracks you expect to change to `baseline/SLUG/targets.txt`,
-   before the fix, not after.
-3. `tools/snapshot.py --issue SLUG --label before`, make the change, then
-   `--label after`. Add `--level out` when the fix touches what gets written;
-   build that output with `write_tags.py --only baseline/SLUG/paths.txt
-   --out <your worktree>/output/_all`.
-4. `tools/snapdiff.py --issue SLUG --by-cohort`. **Missed** means the fix did
-   nothing. **Collateral** means it broke something else. Both are failures.
-   Quote the counts in the PR.
-
-`--by-cohort` splits every count by artist locale (Balkan or not) and by
-container. A total can improve while half the library gets worse, and those
-are the two halves it happens on: m4a is a quarter of these files, and the
-Balkan tracks are the ones every external catalogue is thinnest on. Quote the
-split, not just the total. **False auto-accepts** is the line to read first:
-a row that was auto-accepted and whose artist or title moved anyway shipped
-wrong without anyone being asked to look at it.
+For a change to metadata across the library, one track is not evidence, and
+neither is the track that prompted the fix. `tools/sample.py`,
+`tools/snapshot.py` and `tools/snapdiff.py` diff a frozen 10% before and
+after; `README.md` has the workflow. Declare the tracks you expect to change
+before making it, and quote the `--by-cohort` counts in the PR: a total can
+improve while m4a or the Balkan tracks get worse, and **false auto-accepts**
+is the line to read first.
 
 ## Commits
 
@@ -257,9 +229,9 @@ to commits, and name the issues a commit or PR closes.
 
 ## How I want you to work
 
-- Deliver what was asked, at the scope asked. If a better approach exists, say
-  so in a sentence and carry on with the task as asked rather than quietly
-  widening it.
+- Deliver what was asked, at the scope asked, and finish the whole task before
+  handing back. If a better approach exists, say so in a sentence and carry on
+  with the task as asked rather than quietly widening or narrowing it.
 - Explain what you changed and why at the end. The why is the point.
 - Keep the README current in the same change that alters behaviour, not
   afterwards.
