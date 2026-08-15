@@ -247,7 +247,7 @@ Then `verify` reads the output back and reports what still needs you.
 ```
 1.  fingerprint
 2.  tagseed
-3.  identify -> textsearch          ║  analyze -> silence -> dedupe
+3.  identify -> textsearch          ║  analyze -> silence -> dedupe -> intros
 4.  review
 5.  from_filename -> review
 6.  hints_resolve -> review

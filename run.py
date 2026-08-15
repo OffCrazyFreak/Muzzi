@@ -245,8 +245,24 @@ def main():
             # silence measures the SOURCE files, so it needs nothing but the
             # track list -- and measuring the source is what makes trimming
             # idempotent, since the thing measured never changes.
+            # intros after dedupe, which is the only cache it needs beyond
+            # the fingerprints: it collapses files the dedupe stages already
+            # call the same song, so that three copies of one track do not
+            # look like three files sharing a bumper.
+            # It was documented as a stage and left out of this plan, so
+            # cache/intros.json only changed when somebody remembered to run
+            # it by hand, and "5 - shared intros.ods" was empty for everyone
+            # who did not. Same failure as tagseed, one stage over.
+            # It reads fingerprints rather than audio, so it is not IMMUTABLE:
+            # a later round with new duplicates should re-cluster. Measured at
+            # 15s over 1727 fingerprints.
+            # dedupe_names has not run yet at this point, and measured on this
+            # library that changes nothing: a name-duplicate is the same song
+            # in a DIFFERENT recording, so its fingerprints differ and it
+            # cannot share an exact opening. 9 clusters and 106 files either
+            # way.
             [stage("analyze", *args.root, *jflag), stage("silence", *jflag),
-             stage("dedupe")],
+             stage("dedupe"), stage("intros")],
         ]),
 
         # First decision point: who is still unidentified.
