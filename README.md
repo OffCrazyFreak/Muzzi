@@ -1283,13 +1283,16 @@ to, batched 50 at a time. It needs `acoustid_user_key` in
 `acoustid_key`: that one identifies Muzzi, this one identifies you as the
 submitter. Without it the stage refuses rather than sending anonymously.
 
-**LRCLIB** takes timed lyrics, and every sheet is checked against LRCLIB
-before it is offered, because most of them came from there. Sampled over 40
-tracks, 29 were already present and 4 were genuinely missing, so roughly one
-sheet in eight is worth sending and the rest would be a no-op. That check
-matters more than it sounds: LRCLIB gates publishing on proof of work, about
-12 million SHA-256 hashes and some 7 seconds of one core per sheet, so
-offering everything would cost hours to publish almost nothing.
+**LRCLIB** takes timed lyrics. Each sheet is checked against LRCLIB
+immediately before it would be published, not while the list is being built,
+so the dry run counts every eligible sheet and most of those turn out to be
+ones LRCLIB already has: the check is what tells them apart, and it only runs
+under `--submit`. Sampled over 40 tracks, 29 were already present and 4 were
+genuinely missing, so roughly one sheet in eight is worth sending. That check
+matters more than it sounds, because LRCLIB gates publishing on proof of work,
+about 12 million SHA-256 hashes and some 7 seconds of one core per sheet, so
+publishing blind would cost hours to add almost nothing. A check that cannot
+reach LRCLIB leaves the sheet for the next run rather than retiring it.
 
 **MusicBrainz is not here**, and that is measured rather than skipped. Its
 API accepts tags, ratings, barcodes, ISRCs and collections, and the

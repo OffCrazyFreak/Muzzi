@@ -162,10 +162,17 @@ def acoustid_batch(items, user_key, client_key, session=None, submit=False):
     if not submit:
         return True, f"would send {len(items)} fingerprints"
     s = session or requests.Session()
-    r = s.post(ACOUSTID_SUBMIT, data=data, headers=UA, timeout=60)
-    if r.status_code != 200:
-        return False, f"HTTP {r.status_code}: {r.text[:120]}"
-    got = r.json()
+    # Never raises. A submission run saves as it goes, so an exception here
+    # would abandon a half-recorded run and lose the record of what did go.
+    try:
+        r = s.post(ACOUSTID_SUBMIT, data=data, headers=UA, timeout=60)
+        if r.status_code != 200:
+            return False, f"HTTP {r.status_code}: {r.text[:120]}"
+        got = r.json()
+    except requests.RequestException as e:
+        return False, f"{type(e).__name__}: {str(e)[:80]}"
+    except ValueError:
+        return False, "answered with something that is not JSON"
     if got.get("status") != "ok":
         return False, f"status {got.get('status')}: {str(got)[:120]}"
     return True, f"accepted {len(got.get('submissions') or [])}"
@@ -221,12 +228,16 @@ def solve(prefix, target, cap=50_000_000):
 def publish_token(session=None):
     """-> a solved `prefix:nonce` token, or None."""
     s = session or requests.Session()
-    r = s.post(LRCLIB_CHALLENGE, headers=UA, timeout=20)
-    if r.status_code != 200:
+    try:
+        r = s.post(LRCLIB_CHALLENGE, headers=UA, timeout=20)
+        if r.status_code != 200:
+            return None
+        got = r.json()
+        prefix, target = got["prefix"], got["target"]
+    except (requests.RequestException, ValueError, KeyError, TypeError):
         return None
-    got = r.json()
-    n = solve(got["prefix"], got["target"])
-    return None if n is None else f"{got['prefix']}:{n}"
+    n = solve(prefix, target)
+    return None if n is None else f"{prefix}:{n}"
 
 
 def lrclib_candidates(rows=None, done=None):
@@ -271,8 +282,11 @@ def lrclib_publish(item, token, session=None, submit=False):
     body = {"trackName": item["title"], "artistName": item["artist"],
             "albumName": item["album"], "duration": item["duration"],
             "plainLyrics": item["plain"], "syncedLyrics": item["synced"]}
-    r = s.post(LRCLIB_PUBLISH, json=body, timeout=30,
-               headers={**UA, "X-Publish-Token": token})
+    try:
+        r = s.post(LRCLIB_PUBLISH, json=body, timeout=30,
+                   headers={**UA, "X-Publish-Token": token})
+    except requests.RequestException as e:
+        return False, f"{type(e).__name__}: {str(e)[:80]}"
     if r.status_code in (200, 201):
         return True, "published"
     return False, f"HTTP {r.status_code}: {r.text[:120]}"
@@ -290,6 +304,17 @@ def main():
     ap.add_argument("--limit", type=int, help="stop after this many")
     args = ap.parse_args()
     both = not (args.acoustid or args.lrclib)
+    # Reporting on everything is a good default; submitting to everything is
+    # not. `--submit` on its own would send 1276 fingerprints and every
+    # eligible sheet to two different databases from one keystroke, so it has
+    # to say which.
+    if args.submit and both:
+        ap.error("--submit needs --acoustid or --lrclib: say where it goes")
+    # `--limit 0` sends nothing and reads as a no-op, and `--limit -1` slices
+    # off the last item and sends the other 1275, which is the opposite of
+    # what anyone types it for.
+    if args.limit is not None and args.limit < 1:
+        ap.error("--limit must be 1 or more")
 
     done = sent()
     session = requests.Session()
@@ -339,12 +364,26 @@ def main():
             if len(items) > 5:
                 print(f"    ... and {len(items) - 5} more to check")
         else:
-            gave = skipped = 0
+            gave = skipped = unknown = 0
             for it in items:
-                if lrclib_has(it["artist"], it["title"], it["album"],
-                              it["duration"], session) is not False:
+                has = lrclib_has(it["artist"], it["title"], it["album"],
+                                 it["duration"], session)
+                if has is None:
+                    # The check itself failed, which is not "LRCLIB has it".
+                    # Marking it done here would retire the track on a network
+                    # blip and never offer it again, which is caching a failure
+                    # as an answer in the one place the answer is permanent.
+                    unknown += 1
+                    continue
+                if has:
                     skipped += 1
                     done[f"lrclib:{it['path']}"] = {"skipped": "already there"}
+                    # Written here and not only at the foot of the loop. The
+                    # `continue` skips that save, so a run where everything is
+                    # already on LRCLIB, which is the common one, recorded
+                    # nothing and asked the same 1300 questions again next
+                    # time.
+                    _save(done)
                     continue
                 token = publish_token(session)
                 if not token:
@@ -358,7 +397,8 @@ def main():
                     done[f"lrclib:{it['path']}"] = {"published": True}
                 _save(done)
                 time.sleep(1)
-            print(f"    published {gave}, already there {skipped}")
+            print(f"    published {gave}, already there {skipped}, "
+                  f"could not check {unknown} (offered again next run)")
 
     print("\n  MusicBrainz: nothing submittable. Its API takes tags, ratings, "
           "barcodes and ISRCs only,")
