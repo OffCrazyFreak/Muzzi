@@ -1202,7 +1202,11 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
             "total_tracks": (ident or {}).get("total_tracks"),
             # Fills the native `disk` atom on MP4 and DISCNUMBER on Vorbis,
             # which is what the MP3 path has always written into TPOS.
-            "discnumber": (ident or {}).get("disc_number"),
+            # Validated here rather than only in the MP4 branch: the Vorbis
+            # branch writes every field straight through, uppercased, so a
+            # value checked in one container and not the other is the exact
+            # divergence this whole change exists to close.
+            "discnumber": disc_number((ident or {}).get("disc_number")),
             "album": (ident or {}).get("album"),
             "date": (ident or {}).get("year"),
             "genre": primary,
