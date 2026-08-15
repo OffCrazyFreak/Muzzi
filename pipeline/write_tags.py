@@ -50,6 +50,7 @@ from pipeline import subset  # noqa: E402
 from pipeline import lyric_align  # noqa: E402
 from pipeline import silence  # noqa: E402
 from pipeline import intros  # noqa: E402
+from pipeline import ncs  # noqa: E402
 
 VERSION = "muzzi/1"
 REVIEW = os.path.join(HERE, "cache", "review.json")
@@ -1428,6 +1429,13 @@ def main():
     if intro_cuts:
         print(f"  cutting a confirmed intro from {len(intro_cuts)} files")
 
+    # What NCS says its own releases are. Only for the files NCS was asked
+    # about and answered for, which is decided in ncs.py: the folder chooses
+    # who is asked and the catalogue decides whether there is an answer.
+    ncs_genre = ncs.load_matched()
+    if ncs_genre:
+        print(f"  NCS names the genre for {len(ncs_genre)} files")
+
     # Album loudness, energy-weighted by duration -- see album_loudness().
     # Album peak is the loudest peak anywhere on the album, because one hot
     # track has to constrain the whole album's gain or the relative levels
@@ -1547,7 +1555,17 @@ def main():
                      "lead_artist": lead, "all_artists": all_artists,
                      "isrc": cf.get("isrc"),
                      "label": cf.get("label"),
-                     "genres": cf.get("genres"),
+                     # NCS first for its own releases, ahead of the Last.fm
+                     # tags. Not a general preference for one source over
+                     # another: this is the label naming the genre of a record
+                     # it published, against a folksonomy that returned
+                     # "Germany" and "Norway" as genres for these same tracks.
+                     # Prepended rather than substituted, so the detail frame
+                     # keeps everything and only the primary genre moves.
+                     "genres": ([ncs_genre[src]["genre"]] +
+                                [g for g in (cf.get("genres") or [])
+                                 if g != ncs_genre[src]["genre"]]
+                                if src in ncs_genre else cf.get("genres")),
                      "track_number": cf.get("track_number"),
                      "total_tracks": cf.get("total_tracks"),
                      "disc_number": cf.get("disc_number"),

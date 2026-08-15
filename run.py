@@ -108,7 +108,8 @@ IMMUTABLE = ("fingerprint", "analyze", "silence")
 # it would make every round look productive.
 FACT_CACHES = ("cascade.json", "lyrics.json", "enrich.json", "webmatch.json",
                "identity.json", "textsearch.json", "lyric_verify.json",
-               "lyric_align.json", "artist_canon.json", "yt_lookup.json")
+               "lyric_align.json", "artist_canon.json", "yt_lookup.json",
+               "ncs.json")
 
 
 def without(phases, names):
@@ -147,6 +148,13 @@ def cache_state():
                 data = _json.load(fh)
         except (OSError, ValueError):
             continue
+        # Most of these are {track: facts}, so their length is the number of
+        # tracks something was learned about. `ncs.json` is not: it holds a
+        # catalogue and the matches drawn from it, so its length is 2 for ever
+        # and the round loop would read "learned nothing" whatever happened.
+        # The matches are the part that grows as the names improve.
+        if isinstance(data, dict) and "matched" in data:
+            data = data["matched"]
         out[name] = len(data)
     return out
 
@@ -281,6 +289,12 @@ def main():
         ("serial", [stage("artist_names", "--apply"),
                     stage("origin", "--apply"),
                     stage("lastfm_tags"),
+                    # After lastfm_tags, because it overrides what that
+                    # returned for the tracks it covers, and it can only
+                    # override something that is already there. Reads the
+                    # names review settled on, so it goes after the naming
+                    # stages rather than beside the other lookups.
+                    stage("ncs", "--apply"),
                     stage("dedupe_names", "--apply"),
                     # After dedupe_names on purpose: a link found on the copy
                     # that lost is inherited by the one that ships, so this has

@@ -318,6 +318,18 @@ def secret(name):
     return values.get(name) or None if isinstance(values, dict) else None
 
 
+def _ncs(s):
+    """NCS publishes no API, so this asks whether its markup still parses.
+
+    A status code is not the question for a scraped source: a redesigned page
+    returns a cheerful 200 of HTML this cannot read, and that is the failure
+    mode it is most likely to have.
+    """
+    from pipeline import ncs
+    ok, detail = ncs.probe(s)
+    return (OK if ok else CHANGED), detail
+
+
 PROBES = {
     "lrclib": _lrclib,
     "deezer": _deezer,
@@ -327,6 +339,7 @@ PROBES = {
     "coverartarchive": _coverartarchive,
     "ytmusic": _ytmusic,
     "genius": _genius,
+    "ncs": _ncs,
 }
 
 
