@@ -714,19 +714,32 @@ def write_generic(dst, fields, art_path, lyrics):
         # ----:com.apple.iTunes:TRACKNUMBER, which almost nothing reads, and
         # left an inherited trkn beside it free to disagree. The MP3 path
         # writes TRCK and deletes it when unknown; this is the same rule.
-        # disk always goes: nothing here knows a disc number, so any that is
-        # here came in with the file.
+        # The disc number goes in the native `disk` atom for exactly the same
+        # reason. This used to pop it and stop, on the grounds that nothing
+        # here knew a disc number: cascade has known one since it started
+        # reading Deezer albums, the MP3 path has written TPOS from it all
+        # along, and measured on the library 316 of the 350 m4a tracks had one
+        # to write. All 250 that shipped carried no disc number at all.
         f.pop("disk", None)
         f.pop("trkn", None)
         f.pop("----:com.apple.iTunes:TRACKNUMBER", None)
+        f.pop("----:com.apple.iTunes:DISCNUMBER", None)
         if fields.get("tracknumber"):
             try:
                 f["trkn"] = [(int(fields["tracknumber"]),
                               int(fields.get("total_tracks") or 0))]
             except (TypeError, ValueError):
                 pass
+        if fields.get("discnumber"):
+            # Second slot is the disc total, which nothing here knows. 0 is
+            # how MP4 spells "unset" for it, and is what mutagen writes back
+            # for a file that only states the disc.
+            try:
+                f["disk"] = [(int(fields["discnumber"]), 0)]
+            except (TypeError, ValueError):
+                pass
         for k, v in fields.items():
-            if k in m or k in ("tracknumber", "total_tracks"):
+            if k in m or k in ("tracknumber", "total_tracks", "discnumber"):
                 continue
             atom = f"----:com.apple.iTunes:{k.upper()}"
             if v in (None, ""):
@@ -1165,6 +1178,9 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
             # trkn atom's second slot. The MP3 path writes the same pair into
             # TRCK as "4/12".
             "total_tracks": (ident or {}).get("total_tracks"),
+            # Fills the native `disk` atom on MP4 and DISCNUMBER on Vorbis,
+            # which is what the MP3 path has always written into TPOS.
+            "discnumber": (ident or {}).get("disc_number"),
             "album": (ident or {}).get("album"),
             "date": (ident or {}).get("year"),
             "genre": primary,
