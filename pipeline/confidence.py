@@ -190,7 +190,7 @@ def why_review(conn, path):
     return " | ".join(parts)
 
 
-LOCAL_SOURCES = ("tags", "filename", "folder")
+LOCAL_SOURCES = ("tags", "band", "filename", "folder")
 
 
 def local_claims(conn, path):
@@ -237,22 +237,69 @@ def local_claims(conn, path):
     return " | ".join(parts)
 
 
-def local_disagreement(conn, path):
-    """-> [field, ...] where the tags and the filename say different things.
+def _skeleton(s):
+    """-> `s` reduced to its ASCII letters and digits, casefolded.
 
-    The reason the column above is worth a person's time. Where these two
-    agree the file is at least self-consistent; where they differ, one of them
-    is wrong and the pipeline has been picking between them silently since
-    `seed_for` was written.
+    So that a name whose diacritics were destroyed compares equal to the same
+    name intact. The damage here is not one transformation but two, and only
+    one of them is reversible: c-acute survives as an ae ligature and can be
+    undone, while s-caron and z-caron were dropped outright, so "Duško Lokin"
+    is stored as "Duko Lokin" and nothing brings the character back. Measured
+    on the eleven worst cases, a cp1250 round-trip recovers 4 and turns the
+    other 7 into a different wrong spelling, which reads as repaired and is
+    not. Comparing what is left of both is the only test that holds for both
+    halves of the damage.
+
+    Deliberately not NFKD first, which is the obvious thing and the wrong one.
+    Decomposing turns c-acute into a plain c and keeps it, while the damaged
+    copy dropped the character outright, so the two skeletons differ by exactly
+    the letter the comparison is meant to ignore. Only what was ASCII to begin
+    with survives here, from both sides.
+
+    The cost is that two names differing ONLY outside ASCII compare equal, so
+    a genuine "Žana" against "Ana" is not reported. That is a line in `why`
+    not written, not a value changed, and the column still shows both.
+    """
+    return "".join(c for c in (s or "")
+                   if c.isascii() and c.isalnum()).casefold()
+
+
+def local_disagreement(conn, path):
+    """-> [field, ...] where what is in the file and what is in its name differ.
+
+    The reason the column above is worth a person's time. Where these agree the
+    file is at least self-consistent; where they differ, one of them is wrong
+    and the pipeline has been picking between them silently since `seed_for`
+    was written.
+
+    Both tag frames count, and the band frame is the one that usually has an
+    answer: on this library the artist frame is filled on 92 files and the band
+    frame on 1039. Comparing only the first would call 1031 files agreed when
+    nothing had been compared at all.
     """
     out = []
     for field in IDENTITY:
-        vals = {}
+        named, from_file = None, set()
         for r in evidence.observations(conn, path, field):
-            if (r["state"] == evidence.FOUND and r["value_norm"]
-                    and r["source"] in ("tags", "filename")):
-                vals[r["source"]] = r["value_norm"]
-        if len(vals) == 2 and len(set(vals.values())) == 2:
+            if r["state"] != evidence.FOUND or not r["value_norm"]:
+                continue
+            if r["source"] == "filename":
+                named = r["value_norm"]
+            elif r["source"] in ("tags", "band"):
+                from_file.add(r["value_norm"])
+        # A disagreement needs both sides. Two tag frames that differ from each
+        # other but not from the name is the file being untidy, not the name
+        # being in doubt, and it is not what the column is asking about.
+        #
+        # Compared on skeletons, so the same name spelled with its diacritics
+        # intact in one place and destroyed in the other is not reported as a
+        # disagreement. It is not one: the filename already wins it, nobody can
+        # act on it, and counting it would put a line on 282 rows of which
+        # around 250 say only that a c-acute did not survive a download. The
+        # column still shows every spelling; this decides what is worth a
+        # sentence.
+        if named and from_file and not any(
+                _skeleton(named) == _skeleton(v) for v in from_file):
             out.append(field)
     return out
 
