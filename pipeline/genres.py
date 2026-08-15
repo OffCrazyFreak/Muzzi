@@ -13,14 +13,28 @@ import re
 import unicodedata
 
 # Nationality, country and non-genre chatter that Last.fm returns as tags.
+#
+# Both halves of every place, which was not true before and is the whole reason
+# this comment is here. The list held the adjective and not the noun, so
+# "german" and "norwegian" were dropped while "Germany", "Norway" and "Sweden"
+# went through, and `bosnia\w*` missed "Bosnia-Herzegovina" because `\w` does
+# not match a hyphen. 39 tag instances reached the detail frame that way.
+#
+# Anchored and exact, so a genre that merely contains a place name is safe:
+# "Country" is a genre, "Latin" is a genre, and neither is in here.
 _NOISE = re.compile(
-    r"^(croatia\w*|serbia\w*|bosnia\w*|balkan\w*|yugoslav\w*|slovenia\w*|"
-    r"macedonia\w*|montenegr\w*|austral\w*|canad\w*|american|british|english|"
-    r"german|swedish|norwegian|finnish|french|italian|spanish|belarus\w*|"
-    r"russian|ukrain\w*|polish|dutch|irish|scottish|japanese|korean|"
+    r"^(croatia\w*|serbia\w*|bosnia[\w-]*|hercegovina|herzegovina|balkan\w*|"
+    r"yugoslav\w*|slovenia\w*|macedonia\w*|montenegr\w*|austral\w*|canad\w*|"
+    r"american|british|english|german\w*|swed\w*|norw\w*|finn\w*|finland|"
+    r"french|france|italian|italy|spanish|spain|belarus\w*|russia\w*|"
+    r"ukrain\w*|pol(?:ish|and)|dutch|netherlands|denmark|danish|irish|"
+    r"ireland|scottish|scotland|japan\w*|korea\w*|czech\w*|greece|greek|"
+    r"portugal|portuguese|turkey|turkish|brazil\w*|mexic\w*|"
+    r"u\.?s\.?a\.?|united states|new york|zagreb|beograd|belgrade|sarajevo|"
+    r"ljubljana|skopje|"
     r"female vocalist\w*|male vocalist\w*|singer.songwriter|instrumental|"
     r"\d{2,4}s?|seen live|favou?rite\w*|awesome|beautiful|love|catchy|"
-    r"summer|chill|christian|cover|soundtrack|ex.?yu|srbija|hrvatska|"
+    r"summer|chill|christian|cover|soundtrack|ex.?yu|srbija|hrvatsk\w*|"
     r"nederlandstalig|noisy.*|domaci|doma[cć]i)$", re.I)
 
 # Ordered: the first match wins, so specific beats general
