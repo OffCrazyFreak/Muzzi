@@ -264,6 +264,9 @@ def main():
     ap.add_argument("roots", nargs="+")
     ap.add_argument("--force", action="store_true",
                     help="re-read every file's tags, ignoring the cache")
+    ap.add_argument("--no-evidence", dest="evidence", action="store_false",
+                    help="do not record what the tags, the filename and the "
+                         "folder each say into the evidence store")
     args = ap.parse_args()
     out = os.path.join(here, "cache", "tagseed.json")
     previous = {}
@@ -289,6 +292,24 @@ def main():
     print(f"    channel-looking artists left weak: {len(weak)}")
     for s in weak[:10]:
         print(f"      {str(s['artist'])[:34]:34} ({str(s['title'])[:30]})")
+
+    # Written from here because this stage already walks every file and
+    # already runs before identify, so the three local claims are on record
+    # before anything tries to check them. A separate stage would walk the
+    # same tree a second time to learn the same three things.
+    if args.evidence:
+        from pipeline import evidence
+        paths = list(sources.walk(args.roots))
+        # Not closed: evidence.connect() hands out one connection per thread
+        # and caches it, so closing would leave a dead handle in that cache
+        # for anything later in the same process.
+        conn = evidence.connect()
+        counts = evidence.local_observations(conn, paths, seeds)
+        conn.commit()
+        print(f"    local observations recorded for {len(paths)} files: "
+              + ", ".join(f"{k} {v}" for k, v in counts.items()))
+        print("      three claims, one family: they are shown side by side "
+              "and never corroborate each other")
 
 
 if __name__ == "__main__":

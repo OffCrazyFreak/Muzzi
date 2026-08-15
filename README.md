@@ -269,7 +269,7 @@ seeing what the previous one failed on:
 | `fingerprint` | Chromaprint acoustic fingerprint per file |
 | `identify` | fingerprint -> AcoustID -> MusicBrainz. Authoritative, but weak on Balkan music |
 | `textsearch` | search MusicBrainz and Discogs by name |
-| `tagseed` | scores *where* a name came from, so a "Lyrics Channel HD" artist tag doesn't outrank a filename. Incremental on size and mtime, so a file whose tags were rewritten is re-read and one that was not is not |
+| `tagseed` | scores *where* a name came from, so a "Lyrics Channel HD" artist tag doesn't outrank a filename. Incremental on size and mtime, so a file whose tags were rewritten is re-read and one that was not is not. Also records what the tags, the filename and the folder each say as three separate observations, in one family, so they can be read side by side without corroborating each other |
 | `from_filename` | believe the filename, then ask MusicBrainz to confirm it |
 | `webmatch` | YouTube Music, Deezer, iTunes, YouTube, SoundCloud |
 | `hints_resolve` | turns links you paste into metadata, via yt-dlp. A wholly decorative bracketed group is removed whole, so `(Lyrics/Tekst)` cannot leave its slash behind, while `AC/DC` and `(Payphone Parody)` are kept. An upload year goes only when the title carried decoration too, so `Sarvagon 2015` survives, and a `\| NCS - Copyright Free Music` slogan is dropped. A pasted search is answered too, but its first result is scored below the auto bar and lands in review, because nobody picked it. A quoted left side followed by a description (`"This is my Biome" - A Minecraft Parody of ...`) is a title and a description, not an artist and a title, so the quoted part becomes the title and the artist comes from the uploader or from you |
@@ -360,13 +360,19 @@ the file at full length. A `trim=n` pins both ends; a `trim=y` releases a cut
 the pipeline declined to make on its own, including one a lyric sheet objected
 to.
 
-Every sheet carries two columns you do not fill in, both read out of the
+Every sheet carries three columns you do not fill in, all read out of the
 evidence store:
 
 - **`checked`** says what was already asked and what it said, counted in
   independence families rather than in sources: `artist: human agree;
   musicbrainz disagree`. Cover Art Archive agreeing with MusicBrainz is
   MusicBrainz agreeing with itself, so it is one voice, not two.
+- **`on the file`** says what the file itself claims, spelled out as three
+  separate things: `tags: (no artist) - Play Hard | filename: David Guetta -
+  Play Hard (ft. Ne-Yo, Akon) | folder: Music Mine`. They are one family, so
+  none of them corroborates another and none of them votes. The column exists
+  because the pipeline used to fuse them before anything could look: the seed
+  was `filename_artist or tag_artist` and the disagreement went with it.
 - **`look here`** is a row of clickable links. The first ones open the exact
   record a source returned, built from the identifier it gave: the Deezer
   track, the MusicBrainz recording, every recording filed under that ISRC.

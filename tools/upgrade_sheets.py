@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Add the `checked` and `look here` columns to review sheets already in use.
+"""Add the evidence columns to review sheets already in use.
 
 `review.py` rebuilds `review/` from scratch every run, which is fine when your
 answers are in `hints.tsv` and not fine when they are still sitting in the
-spreadsheet you have open. This adds the two new columns to the sheets where
-they are, so a queue part-way through does not have to be restarted to gain
-them.
+spreadsheet you have open. This adds whichever of the new columns a sheet is
+missing, where they are, so a queue part-way through does not have to be
+restarted to gain them.
 
 Nothing is rewritten. Each existing cell object is left exactly as it is and
-two new cells are inserted beside it, so formatting, value types and every
+the new cells are inserted beside it, so formatting, value types and every
 answer already typed survive by construction rather than by care. A sheet that
-already has the columns is skipped, so running this twice is safe.
+already has the columns is skipped, so running this twice is safe, and a sheet
+that has some of them gains only the rest.
 
 Usage:
   upgrade_sheets.py --dir /path/to/review --dry-run
@@ -30,8 +31,13 @@ from pipeline import confidence, evidence, links, review  # noqa: E402
 # Where the new columns go: after `why`, which is the other column explaining
 # the row, and before `audio_flags`. Matches the layout review.py now writes,
 # so an upgraded sheet and a freshly built one are the same shape.
+#
+# In order, because they are added over time and a sheet upgraded once already
+# holds the earlier ones. `on the file` arrived after the other two, so the
+# common case now is a sheet that needs exactly one column inserted in the
+# middle of a block it already has.
 AFTER = "why"
-NEW = ["checked", "look here"]
+BLOCK = ["checked", "on the file", "look here"]
 
 
 def cells_of(row):
@@ -65,6 +71,41 @@ def text_of(cell):
     return " ".join(str(p) for p in cell.getElementsByType(P)).strip()
 
 
+def plan_for(header):
+    """-> [(index in this header, column name)] to insert, ascending.
+
+    Each missing column goes after whichever of its predecessors the sheet
+    already has, and after `why` when it has none of them. Appending them all
+    at the end instead would put `on the file` beyond `look here` on a sheet
+    upgraded before it existed, which is a different layout from the one
+    review.py writes, and the two have to match or the next rebuild moves
+    every answer a column sideways.
+    """
+    out = []
+    for i, name in enumerate(BLOCK):
+        if name in header:
+            continue
+        anchor = None
+        for prev in reversed(BLOCK[:i]):
+            if prev in header:
+                anchor = header.index(prev) + 1
+                break
+        out.append((anchor if anchor is not None else header.index(AFTER) + 1,
+                    name))
+    # Stable, so two columns sharing an anchor keep the order BLOCK gives them.
+    out.sort(key=lambda x: x[0])
+    return out
+
+
+def insert_all(cells, plan, value_of):
+    """Insert the planned columns, allowing for the ones already inserted."""
+    from odf.table import TableCell
+    for offset, (at, name) in enumerate(plan):
+        c = TableCell(valuetype="string")
+        review._write_cell(c, value_of(name) or "")
+        cells.insert(at + offset, c)
+
+
 def rebuild(row, cells):
     for tc in list(row.childNodes):
         row.removeChild(tc)
@@ -84,7 +125,7 @@ def upgrade(path, conn, paths_by_name, dry=False):
     tbl = tables[0]
     rows = tbl.getElementsByType(TableRow)
 
-    header, at = None, None
+    header = None
     for row in rows:
         names = [text_of(c) for c in cells_of(row)]
         if "file" in names:
@@ -92,11 +133,11 @@ def upgrade(path, conn, paths_by_name, dry=False):
             break
     if header is None:
         return 0, "no header row"
-    if all(c in header for c in NEW):
+    if all(c in header for c in BLOCK):
         return 0, "already upgraded"
     if AFTER not in header:
         return 0, f"no {AFTER!r} column to insert after"
-    at = header.index(AFTER) + 1
+    plan = plan_for(header)
     fi = header.index("file")
 
     touched = 0
@@ -106,23 +147,20 @@ def upgrade(path, conn, paths_by_name, dry=False):
         names = [text_of(c) for c in cells]
         if not seen_header and "file" in names:
             seen_header = True
-            for n, label in enumerate(NEW):
-                c = TableCell(valuetype="string")
-                review._write_cell(c, label)
-                cells.insert(at + n, c)
+            insert_all(cells, plan, lambda name: name)
             rebuild(row, cells)
             continue
         if not seen_header:
             # The instruction line above the header. It is one long cell and
-            # the rest are padding, so two more empties keep the widths equal.
-            for _ in NEW:
+            # the rest are padding, so more empties keep the widths equal.
+            for _ in plan:
                 cells.append(TableCell(valuetype="string"))
             rebuild(row, cells)
             continue
 
         name = text_of(cells[fi]) if len(cells) > fi else ""
         track = paths_by_name.get(name)
-        checked, found = "", ""
+        values = {}
         if track and conn is not None:
             try:
                 r = {"file": name, "proposed_artist": None,
@@ -134,14 +172,15 @@ def upgrade(path, conn, paths_by_name, dry=False):
                     if col in header and len(cells) > header.index(col):
                         r[key] = text_of(cells[header.index(col)]) or None
                 artist, title = review._search_terms(r)
-                checked = confidence.why_review(conn, track)
-                found = links.dossier(conn, track, artist, title, links.SEARCH)
+                values = {
+                    "checked": confidence.why_review(conn, track),
+                    "on the file": confidence.local_claims(conn, track),
+                    "look here": links.dossier(conn, track, artist, title,
+                                               links.SEARCH),
+                }
             except Exception:
-                checked, found = "", ""
-        for n, value in enumerate((checked, found)):
-            c = TableCell(valuetype="string")
-            review._write_cell(c, value if value else "")
-            cells.insert(at + n, c)
+                values = {}
+        insert_all(cells, plan, values.get)
         rebuild(row, cells)
         touched += 1
 

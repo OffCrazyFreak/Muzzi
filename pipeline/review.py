@@ -616,7 +616,8 @@ def _ods(path, title, note, items, with_proposal=True, cols=None, cells=None):
     if cols is None:
         cols = ["rank", "confidence", "tier", "file", "proposed_artist",
                 "proposed_title", "proposed_album", "proposed_year", "why",
-                "checked", "look here", "audio_flags", "hint"]
+                "checked", "on the file", "look here", "audio_flags",
+                "hint"]
 
     if cells is None:
         def cells(r, i):
@@ -626,7 +627,7 @@ def _ods(path, title, note, items, with_proposal=True, cols=None, cells=None):
                     (r["proposed_album"] or "") if with_proposal else "",
                     (r["proposed_year"] or "") if with_proposal else "",
                     "; ".join(r["reasons"]), r.get("checked", ""),
-                    r.get("links") or "",
+                    r.get("on_file", ""), r.get("links") or "",
                     "; ".join(r["flags"]), r["hint"]]
     try:
         from odf.opendocument import OpenDocumentSpreadsheet
@@ -728,6 +729,12 @@ def attach_dossier(rows, db=None):
             # dossier throw would leave a row saying what was asked with no
             # way to go and look, which reads as "there is nowhere to check".
             checked = confidence.why_review(conn, path)
+            # What the file says about itself, kept apart from what was asked
+            # about it. Three claims that all came off the same download, so
+            # they belong in their own column rather than folded into the one
+            # that counts independent sources.
+            on_file = confidence.local_claims(conn, path)
+            differ = confidence.local_disagreement(conn, path)
             # Every site, not only the ones that were asked. Offering the
             # asked-only subset was the first shape of this and it read
             # backwards: a row is in review precisely because what was asked
@@ -737,6 +744,21 @@ def attach_dossier(rows, db=None):
         except Exception:
             continue
         r["checked"], r["links"] = checked, found
+        r["on_file"] = on_file
+        # The column shows every disagreement; the `why` line names only the
+        # artist ones. Measured over the library: the tags and the filename
+        # differ on 234 titles and 22 artists, and almost every title
+        # difference is one of two things a person cannot help with. 188 are
+        # the same words with the diacritics destroyed ("Tisina" written
+        # "Ti\x9aina"), and most of the rest are a feature credit the filename
+        # carries and the tag does not ("Play Hard (ft. Ne-Yo, Akon)" against
+        # "Play Hard"). The filename already wins both. A disagreement about
+        # the artist is the one where the wrong choice files a song under an
+        # uploading channel, so it is the one worth a line.
+        if "artist" in differ:
+            r["reasons"] = list(r.get("reasons") or []) + [
+                "the tags and the filename name different artists; see the "
+                "`on the file` column"]
     return rows
 
 
