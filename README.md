@@ -254,7 +254,7 @@ Then `verify` reads the output back and reports what still needs you.
 7.  webmatch -> review
 8.  cascade -> fetch_art -> ...     ║  lyrics_fetch -> ... -> lyric_align
 9.  review
-10. artist_names -> origin -> lastfm_tags -> dedupe_names -> yt_links
+10. artist_names -> lastfm_tags -> origin -> ncs -> dedupe_names -> yt_links
 11. write_tags -> export -> verify
 ```
 
@@ -295,7 +295,7 @@ can't be wrong about which file it's describing:
 | `fetch_art` | downloads artwork, once per album |
 | `lyrics_fetch` | LRCLIB first, preferring synced lyrics and choosing by duration match. When LRCLIB has nothing, YouTube Music and then Genius are asked, judged against the same name comparison, so no source gets a looser standard than another. A YouTube Music sheet whose own recording is more than 2 seconds from your file keeps its words and loses its timings here; an LRCLIB sheet carries its duration with it and is judged the same way later, by `write_tags` |
 | `genres` | collapses multi-source genre soup into one canonical genre, and holds the whitelist that is the only vocabulary allowed to reach a file |
-| `origin` | which country each artist is from, from Last.fm tags cross-checked against ISRC |
+| `origin` | which country each artist is from, from Last.fm tags cross-checked against ISRC. Shares `lastfm_tags`' cache, so it runs after it and asks Last.fm nothing a warm library already answered |
 | `lastfm_tags` | community tags for every artist and track. Cached, so the ~20 minutes it takes happens once |
 | `ncs` | the NoCopyrightSounds catalogue, for the genre it publishes about its own releases. Folder-triggered and genre-only: it never names an artist or a title, so an NCS-looking folder still cannot prove an NCS release |
 | `scenes` | picks the ONE genre each track gets, most specific evidence first |

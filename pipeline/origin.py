@@ -31,7 +31,6 @@ import argparse
 import json
 import os
 import sys
-import time
 from collections import Counter, defaultdict
 
 import requests
@@ -39,7 +38,7 @@ import requests
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
-from pipeline import artist_names  # noqa: E402
+from pipeline import artist_names, lastfm_tags  # noqa: E402
 from pipeline.write_tags import split_credits  # noqa: E402
 
 REVIEW = os.path.join(HERE, "cache", "review.json")
@@ -72,25 +71,25 @@ _TAGS = {
 _ISRC = {"HR": "hr", "RS": "rs", "BA": "ba", "SI": "si", "MK": "mk",
          "ME": "me", "CS": "rs", "YU": "rs"}
 
-RATE = 5.0
+# How many of an artist's tags are consulted. Last.fm returns them by weight,
+# so this is the top of the list rather than an arbitrary slice.
+TOP_TAGS = 15
 
 
-def lastfm_tags(name, key, session, cache):
-    """-> [tag, ...] lower-cased, or []."""
-    if name in cache:
-        return cache[name]
-    try:
-        r = session.get("https://ws.audioscrobbler.com/2.0/",
-                        params={"method": "artist.gettoptags", "artist": name,
-                                "api_key": key, "format": "json",
-                                "autocorrect": 1}, timeout=20).json()
-        tags = [t["name"].lower()
-                for t in (r.get("toptags", {}).get("tag") or [])][:15]
-    except Exception:
-        tags = []
-    cache[name] = tags
-    time.sleep(1.0 / RATE)
-    return tags
+def artist_tags(name, key, session, cache):
+    """-> [tag, ...] lower-cased, or [].
+
+    Reads `cache/lastfm_tags.json`, the same file lastfm_tags.py fills, rather
+    than a dict that lived for one run. Both stages ask Last.fm the same
+    question (`artist.gettoptags`, autocorrect on) about the same artists, and
+    this one asked first and threw the answers away: measured, 324 of the 690
+    seconds of a fully cached run were origin re-fetching 727 artists that the
+    next stage already held 240 of. run.py now runs lastfm_tags first, so on a
+    warm library this loop makes no requests at all.
+    """
+    return [t["name"] for t in lastfm_tags.tags_for(
+        session, key, "artist.gettoptags", {"artist": name},
+        cache, name)][:TOP_TAGS]
 
 
 def country_from_tags(tags):
@@ -168,11 +167,16 @@ def main():
         candidates = candidates[: args.limit]
 
     key = json.load(open(SECRETS)).get("lastfm_api_key")
-    session, tagcache = requests.Session(), {}
+    session = requests.Session()
+    # The raw Last.fm answers are a cache, not this stage's verdict, so they
+    # are kept whether or not --apply was given. artist_origin.json, which is
+    # the verdict, still only moves under --apply.
+    tags_cache = lastfm_tags.load_cache()
+    before = len(tags_cache["artist"])
     out, stats = {}, Counter()
     print(f"\n  {len(candidates)} candidate artists\n")
     for name in candidates:
-        tags = lastfm_tags(name, key, session, tagcache) if key else []
+        tags = artist_tags(name, key, session, tags_cache["artist"]) if key else []
         by_tag = country_from_tags(tags)
         by_isrc = (isrc_by_artist[name].most_common(1)[0][0]
                    if isrc_by_artist.get(name) else None)
@@ -194,6 +198,11 @@ def main():
 
     for k, n in stats.most_common():
         print(f"    {k:34} {n}")
+    fetched = len(tags_cache["artist"]) - before
+    print(f"\n    {fetched} artists fetched from Last.fm, "
+          f"{len(candidates) - fetched} already cached")
+    if fetched:
+        lastfm_tags.save_cache(tags_cache)
     if args.apply:
         json.dump(out, open(OUT + ".tmp", "w"), ensure_ascii=False, indent=1)
         os.replace(OUT + ".tmp", OUT)
