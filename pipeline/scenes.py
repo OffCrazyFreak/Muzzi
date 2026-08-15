@@ -37,6 +37,7 @@ from collections import Counter
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
+from pipeline import genres  # noqa: E402
 from pipeline.genres import allow  # noqa: E402
 
 CONFIG = os.path.join(HERE, "config", "scenes.json")
@@ -80,21 +81,10 @@ _JUNK = re.compile(
     r"under \d+ listeners|garbage|zvezde granda|eurovision.*|my music|"
     r"various artists.*|awesome|beautiful|love|00s|90s|80s|10s"
     # Nationality is not a genre. It is already the Language crate, and
-    # "serbian" as a genre tells you nothing "Serbian" did not.
-    r"|serbian|croatian|bosnian|serbia|croatia|hrvatska|hrvatsko|srbija"
-    r"|bosnian?|beograd|belgrade|zagreb|sarajevo|balkan|ex-yugoslavia"
-    r"|macedonian|slovenian|montenegrin|montenegro"
-    r"|bosnia and herzegovina|bosnia-herzegovina|herzegovina"
-    # Any other nationality or language. Last.fm users tag where an act is
-    # from as readily as what it sounds like, and "German" is not a genre.
-    r"|german|swedish|icelandic|french|italian|spanish|polish|russian|korean"
-    r"|japanese|dutch|finnish|norwegian|danish|greek|turkish|portuguese"
-    r"|brazilian|american|british|english|australian|canadian|irish|scottish"
-    r"|latvian|ukrainian|romanian|bulgarian|hungarian|czech|slovak"
-    # Country names as well as the adjectives: users tag both.
-    r"|sweden|germany|france|italy|spain|poland|russia|korea|japan|holland"
-    r"|netherlands|finland|norway|denmark|greece|turkey|portugal|brazil"
-    r"|usa|uk|america|britain|australia|canada|ireland|scotland|iceland)$", re.I)
+    # "serbian" as a genre tells you nothing "Serbian" did not. Shared with
+    # genres._NOISE rather than spelled out twice: the two copies had drifted,
+    # and this one was the fuller of them.
+    r"|" + genres.PLACES + r")$", re.I)
 
 MIN_TAG_WEIGHT = 10
 # A tag also has to be substantial NEXT TO the artist's own top tag. Without

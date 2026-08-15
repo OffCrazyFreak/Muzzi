@@ -12,15 +12,48 @@ that wants detail.
 import re
 import unicodedata
 
+# Every place, in every form a tagger writes one. Last.fm users tag where an
+# act is from as readily as what it sounds like, and a country is not a genre.
+#
+# Both halves of every name, which was not true here before. This list held the
+# adjective without the noun, so "german" and "norwegian" were dropped while
+# "Germany", "Norway" and "Sweden" went straight through, and `bosnia\w*`
+# missed "Bosnia-Herzegovina" because `\w` does not match a hyphen.
+#
+# Shared with `scenes._JUNK`, which had the fuller list and is where most of
+# this came from. Two hand-maintained copies of the same idea is how one of
+# them came to be missing nine nationalities the other had, so there is one
+# copy and `scenes` imports it. `genres` is the lower-level module (scenes
+# already imports `allow` from here), so it lives here.
+#
+# Anchored by both callers, so a genre that merely contains a place name is
+# safe: "Country" is a genre, "Latin" is a genre, and neither is in here.
+PLACES = (
+    # The compound is spelled out rather than allowed for with a wider
+    # character class. `bosnia[\w -]*` catches "Bosnia-Herzegovina" and,
+    # because it now spans a space, "Bosnian Black Metal" as well, which is a
+    # real genre and maps to Metal. A place list that eats genres is worse
+    # than one that misses places.
+    r"croatia\w*|serbia\w*|srbija|hrvatsk\w*|bosnia\w*|"
+    r"bosnia[- ]and[- ]herzegovina|bosnia-herzegovina|hercegovina|"
+    r"herzegovina|balkan\w*|yugoslav\w*|ex.?yugoslavia|slovenia\w*|"
+    r"macedonia\w*|montenegr\w*|beograd|belgrade|zagreb|sarajevo|ljubljana|"
+    r"skopje|"
+    r"austral\w*|canad\w*|america\w*|britain|british|english|german\w*|"
+    r"swed\w*|norw\w*|finn\w*|finland|french|france|italian|italy|spanish|"
+    r"spain|belarus\w*|russia\w*|ukrain\w*|pol(?:ish|and)|dutch|holland|"
+    r"netherlands|denmark|danish|irish|ireland|scottish|scotland|japan\w*|"
+    r"korea\w*|czech\w*|slovak\w*|latvia\w*|romania\w*|bulgaria\w*|hungar\w*|"
+    r"iceland\w*|greece|greek|portugal|portuguese|turkey|turkish|brazil\w*|"
+    r"mexic\w*|u\.?s\.?a\.?|uk|united states|new york"
+)
+
 # Nationality, country and non-genre chatter that Last.fm returns as tags.
 _NOISE = re.compile(
-    r"^(croatia\w*|serbia\w*|bosnia\w*|balkan\w*|yugoslav\w*|slovenia\w*|"
-    r"macedonia\w*|montenegr\w*|austral\w*|canad\w*|american|british|english|"
-    r"german|swedish|norwegian|finnish|french|italian|spanish|belarus\w*|"
-    r"russian|ukrain\w*|polish|dutch|irish|scottish|japanese|korean|"
+    r"^(" + PLACES + r"|"
     r"female vocalist\w*|male vocalist\w*|singer.songwriter|instrumental|"
     r"\d{2,4}s?|seen live|favou?rite\w*|awesome|beautiful|love|catchy|"
-    r"summer|chill|christian|cover|soundtrack|ex.?yu|srbija|hrvatska|"
+    r"summer|chill|christian|cover|soundtrack|ex.?yu|"
     r"nederlandstalig|noisy.*|domaci|doma[cć]i)$", re.I)
 
 # Ordered: the first match wins, so specific beats general
