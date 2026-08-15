@@ -79,6 +79,46 @@ def tags_for(session, key, method, params, cache, cache_key):
     return out
 
 
+def load_cache():
+    """-> the persistent tag cache, both levels present.
+
+    origin.py reads the same file, so the shape is settled here rather than
+    in each caller: a stage that assumed a bare {artist: tags} dict would
+    quietly write a second, incompatible cache over this one.
+    """
+    cache = {}
+    if os.path.exists(OUT):
+        try:
+            with open(OUT, encoding="utf-8") as fh:
+                cache = json.load(fh)
+        except (OSError, ValueError):
+            cache = {}
+    # A file holding valid JSON that is not an object parses fine and then
+    # raises on .setdefault, which would escape this module and take down a
+    # stage rather than reading as "no cache". Same hazard health.secret()
+    # names for secrets.json, and a truncated write is how it happens here.
+    if not isinstance(cache, dict):
+        cache = {}
+    for level in ("artist", "track"):
+        if not isinstance(cache.get(level), dict):
+            cache[level] = {}
+    return cache
+
+
+def save_cache(cache):
+    """Write the tag cache, atomically.
+
+    Two stages fill this file now, and both are interruptible network loops.
+    A plain json.dump truncates in place, so a Ctrl-C mid-write left a
+    half-written cache that the next run could not parse and would refill
+    from scratch.
+    """
+    tmp = OUT + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(cache, fh, ensure_ascii=False, indent=1)
+    os.replace(tmp, OUT)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -92,9 +132,7 @@ def main():
     rows = json.load(open(REVIEW))
     mapping, _w, _g = artist_names.build(rows)
     origin = json.load(open(ORIGIN)) if os.path.exists(ORIGIN) else {}
-    cache = json.load(open(OUT)) if os.path.exists(OUT) else {"artist": {}, "track": {}}
-    cache.setdefault("artist", {})
-    cache.setdefault("track", {})
+    cache = load_cache()
 
     key = json.load(open(SECRETS)).get("lastfm_api_key")
     session = requests.Session()
@@ -117,15 +155,15 @@ def main():
                      cache["artist"], a)
             if i % 100 == 0:
                 print(f"    {i}/{len(artists)} artists", flush=True)
-                json.dump(cache, open(OUT, "w"), ensure_ascii=False, indent=1)
+                save_cache(cache)
         if args.tracks:
             for i, (a, t) in enumerate(wanted, 1):
                 tags_for(session, key, "track.gettoptags",
                          {"artist": a, "track": t}, cache["track"], f"{a}|{t}")
                 if i % 200 == 0:
                     print(f"    {i}/{len(wanted)} tracks", flush=True)
-                    json.dump(cache, open(OUT, "w"), ensure_ascii=False, indent=1)
-        json.dump(cache, open(OUT, "w"), ensure_ascii=False, indent=1)
+                    save_cache(cache)
+        save_cache(cache)
         print(f"\n  -> {OUT}\n")
 
     # ---- report ----

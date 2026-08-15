@@ -284,11 +284,17 @@ def main():
         # then one copy per song.
         # origin needs the canonical spelling to key on, and produces the
         # artist-country map that splits the Balkan crate into real scenes.
-        # origin needs the canonical spelling to key on; lastfm_tags feeds the
-        # genre choice and caches, so a re-run costs nothing.
+        #
+        # lastfm_tags BEFORE origin, which is the opposite of what it was.
+        # Both ask Last.fm the same question about the same artists, and only
+        # lastfm_tags kept the answers: origin refetched every candidate on
+        # every run, which was 324 of the 690 seconds of a fully cached run.
+        # The reverse order looked like a dependency but was not -- lastfm_tags
+        # reads artist_origin.json only to filter `--report --origin`, which
+        # nothing here passes.
         ("serial", [stage("artist_names", "--apply"),
-                    stage("origin", "--apply"),
                     stage("lastfm_tags"),
+                    stage("origin", "--apply"),
                     # After lastfm_tags, because it overrides what that
                     # returned for the tracks it covers, and it can only
                     # override something that is already there. Reads the
