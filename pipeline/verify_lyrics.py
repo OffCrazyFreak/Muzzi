@@ -64,6 +64,23 @@ def _digest(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16] if text else ""
 
 
+# How a failed transcription marks itself. One spelling, because the writer
+# and the two readers below have to agree: a record recognised as a verdict by
+# one and as an error by another is worse than either.
+ERROR_PREFIX = "error: "
+
+
+def _is_error(rec):
+    """-> True when this record is a failure wearing a verdict's clothes.
+
+    An exception during transcription is not a judgement about the song. It is
+    almost always a file that could not be read, which the next run may read
+    perfectly well, so it must never be cached as an answer.
+    """
+    return isinstance(rec, dict) and \
+        str(rec.get("verdict") or "").startswith(ERROR_PREFIX)
+
+
 def _stale(rec, current):
     """-> True when this entry was scored against different words.
 
@@ -202,7 +219,7 @@ def transcribe_one(task):
                         "weak" if sc >= 0.04 else "inconclusive"),
         }
     except Exception as e:
-        return path, {"verdict": f"error: {type(e).__name__}: {str(e)[:80]}"}
+        return path, {"verdict": f"{ERROR_PREFIX}{type(e).__name__}: {str(e)[:80]}"}
 
 
 def _worker_default():
@@ -267,15 +284,20 @@ def main():
 
     def redo(r):
         return (r["path"] not in done or args.control
+                or _is_error(done[r["path"]])
                 or _stale(done[r["path"]], held(r)))
 
     todo = [r for r in cands if redo(r)]
     results = [done[r["path"]] for r in cands if not redo(r)]
+    retried = sum(1 for r in cands
+                  if r["path"] in done and _is_error(done[r["path"]]))
     changed = sum(1 for r in cands
                   if r["path"] in done and not args.control
+                  and not _is_error(done[r["path"]])
                   and _stale(done[r["path"]], held(r)))
     print(f"  {len(todo)} to verify ({len(results)} cached, "
-          f"{changed} of them re-scored because the sheet changed)")
+          f"{changed} of them re-scored because the sheet changed"
+          f"{f', {retried} retried after a cached error' if retried else ''})")
 
     # Phase 1: reference lyrics. Network-bound and globally rate-limited inside
     # lyrics_fetch, so threads only hide latency, they do not raise the rate.
@@ -332,13 +354,30 @@ def main():
                 rec = bypath[path]
                 rec.update(part)
                 results.append(rec)
-                done[path] = rec
+                # An error is not a verdict. Storing it made a file that could
+                # not be read at that moment permanently unverified, because
+                # redo() only asks whether a path is in the cache: 109 records
+                # in this library held "error: MutagenError: No such file" from
+                # a run made while the library was mounted elsewhere, and no
+                # later run ever looked at those tracks again. Left out, so the
+                # next run retries.
+                if not _is_error(rec):
+                    done[path] = rec
                 if i % 25 == 0 or i == len(tasks):
                     el = time.time() - t1
                     print(f"    transcribe {i}/{len(tasks)}  {el:.0f}s  "
                           f"{el/i:.2f}s/track  eta {(len(tasks)-i)*el/i/60:.0f}min",
                           flush=True)
                     json.dump(done, open(OUT, "w"), ensure_ascii=False, indent=1)
+
+    # Drop any error left in the cache by a version that stored them, so one
+    # bad run does not stay believed for ever.
+    stale_errors = [p for p, rec in done.items() if _is_error(rec)]
+    for p in stale_errors:
+        del done[p]
+    if stale_errors:
+        print(f"  {len(stale_errors)} cached errors dropped; "
+              f"they will be retried next run")
 
     json.dump(done, open(OUT, "w"), ensure_ascii=False, indent=1)
     json.dump(lyric_cache, open(LYRIC_CACHE, "w"), ensure_ascii=False)
