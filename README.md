@@ -589,10 +589,11 @@ only when there is a cut and deleted when there is not.
 | Samsung Music | ignores it, and reads the shifted `.lrc` sidecar as before |
 | generic Android | ignores it |
 
-No player reads it, and nothing depends on one that does. It exists so a later
-run can tell a file deliberately cut from a file that was always short. What
-every player sees instead is the audio: a stream copy that starts on the song,
-with the embedded sheet and the sidecar shifted together by the same amount.
+Namida, Samsung Music and generic Android players all ignore it, so nothing
+here depends on any of them reading it. It exists so a later run can tell a
+file deliberately cut from a file that was always short. What those three see
+instead is the audio: a stream copy that starts on the song, with the embedded
+sheet and the sidecar shifted together by the same amount.
 
 **BPM.** Three engines vote (Essentia RhythmExtractor2013 multifeature, degara,
 PercivalBpmEstimator). Validated 20/20 within 4% against published values for
