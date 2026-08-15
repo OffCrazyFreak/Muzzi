@@ -318,6 +318,165 @@ def secret(name):
     return values.get(name) or None if isinstance(values, dict) else None
 
 
+def discogs_token():
+    """-> the Discogs token, read the way textsearch.py reads it.
+
+    Two places, in textsearch's order: config/secrets.json first, then
+    config/config.yaml. Reading only the first is how this probe was written
+    the obvious way and then reported "not configured" for a source that has
+    been answering all along: on this library secrets.json has no
+    discogs_token at all, config.yaml does, and 278 tracks took their best
+    match from Discogs.
+    """
+    token = secret("discogs_token")
+    if token:
+        return token
+    try:
+        import yaml
+        with open(os.path.join(HERE, "config", "config.yaml"),
+                  encoding="utf-8") as fh:
+            return (yaml.safe_load(fh) or {})["discogs"]["user_token"] or None
+    except Exception:
+        return None
+
+
+def _discogs(s):
+    token = discogs_token()
+    if not token:
+        return NO_KEY, "no discogs token in config/secrets.json or config.yaml"
+    r = s.get("https://api.discogs.com/database/search",
+              params={"q": f"{PROBE_ARTIST} {PROBE_TITLE}", "type": "release",
+                      "per_page": 1},
+              headers={**UA, "Authorization": f"Discogs token={token}"},
+              timeout=20)
+    if r.status_code in (401, 403):
+        return BAD_KEY, f"HTTP {r.status_code}, the token was rejected"
+    if r.status_code == 429:
+        return DOWN, "429, rate limited"
+    if r.status_code != 200:
+        return DOWN, f"HTTP {r.status_code}"
+    d = as_object(r)
+    if d is None:
+        return CHANGED, "answered with something that is not an object"
+    if not (d.get("results") or []):
+        return CHANGED, "no hit for a release it certainly has"
+    return OK, "answered"
+
+
+# One AcoustID that is not going to move: the id AcoustID itself returns for
+# the MusicBrainz recording of the probe track. Looked up rather than invented,
+# via track/list_by_mbid on 6380aade-eb66-47ce-a915-46ae372792d2.
+# Asking by trackid means the probe needs no audio and no fingerprint, and
+# still exercises the same endpoint and the same key identify.py uses.
+ACOUSTID_PROBE_TRACK = "6694aad7-eb4d-4b34-8dde-a5168e0e2507"
+
+
+def _acoustid(s):
+    key = secret("acoustid_key")
+    if not key:
+        return NO_KEY, "no acoustid_key in config/secrets.json"
+    r = s.get("https://api.acoustid.org/v2/lookup",
+              params={"client": key, "trackid": ACOUSTID_PROBE_TRACK,
+                      "meta": "recordings", "format": "json"},
+              headers=UA, timeout=20)
+    if r.status_code != 200 and r.status_code != 400:
+        return DOWN, f"HTTP {r.status_code}"
+    d = as_object(r)
+    if d is None:
+        return CHANGED, "answered with something that is not an object"
+    # A rejected key is HTTP 200 with an error object, which is exactly the
+    # shape this module exists to catch. Code 4 is "invalid API key".
+    if d.get("status") != "ok":
+        err = d.get("error") or {}
+        if err.get("code") == 4:
+            return BAD_KEY, "the client key was rejected"
+        return DOWN, f"error {err.get('code')}: {err.get('message')}"
+    if not (d.get("results") or []):
+        return CHANGED, "no result for an AcoustID it certainly has"
+    return OK, "answered"
+
+
+def _lastfm(s):
+    key = secret("lastfm_api_key")
+    if not key:
+        return NO_KEY, "no lastfm_api_key in config/secrets.json"
+    r = s.get("https://ws.audioscrobbler.com/2.0/",
+              params={"method": "artist.gettoptags", "artist": PROBE_ARTIST,
+                      "api_key": key, "format": "json", "autocorrect": 1},
+              headers=UA, timeout=20)
+    d = as_object(r)
+    if d is not None and d.get("error"):
+        # 10 is "invalid API key". Last.fm sends it as HTTP 403 with the code
+        # in the body, so the body is what decides.
+        if d["error"] == 10:
+            return BAD_KEY, "the API key was rejected"
+        return DOWN, f"error {d['error']}: {d.get('message')}"
+    if r.status_code != 200:
+        return DOWN, f"HTTP {r.status_code}"
+    if d is None:
+        return CHANGED, "answered with something that is not an object"
+    if not ((d.get("toptags") or {}).get("tag") or []):
+        # An artist with no tags is how origin.py decides a name landed on
+        # nobody, so an empty list from a probe artist who certainly has tags
+        # is the service changing, not an answer.
+        return CHANGED, "no tags for an artist that certainly has them"
+    return OK, "answered"
+
+
+def _ytdlp_search(prefix, what):
+    """-> (state, detail) for a source reached through yt-dlp's search.
+
+    Shared by YouTube and SoundCloud because they fail the same way and the
+    check is the same question: did a search that certainly has a hit come
+    back with one. yt-dlp exits 0 with empty stdout when an extractor breaks,
+    so the answer is what decides, not the exit code.
+    """
+    import shutil
+    import subprocess
+    if not shutil.which("yt-dlp"):
+        return NO_KEY, "yt-dlp is not on PATH"
+    try:
+        p = subprocess.run(
+            ["yt-dlp", "--skip-download", "--no-warnings", "--flat-playlist",
+             "--dump-json", f"{prefix}1:{PROBE_ARTIST} {PROBE_TITLE}"],
+            capture_output=True, text=True, timeout=60)
+    except Exception as e:
+        return DOWN, f"{type(e).__name__}: {str(e)[:50]}"
+    for line in (p.stdout or "").splitlines():
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if d.get("title"):
+            return OK, "answered"
+    return DOWN, (p.stderr or f"no {what} result for a track it certainly "
+                              f"has")[:70]
+
+
+def _youtube(_s):
+    """Plain YouTube search, which is a different source from YouTube Music.
+
+    webmatch asks both and they break separately: YouTube Music is an API
+    client, this is yt-dlp driving the web extractor, and a YouTube change
+    that breaks the extractor leaves the Music probe answering happily. 41
+    tracks here were matched "youtube only" and 1 as a "youtube art track",
+    so it carries real weight and had nothing watching it.
+    """
+    return _ytdlp_search("ytsearch", "youtube")
+
+
+def _soundcloud(_s):
+    """SoundCloud is reached through yt-dlp's scsearch, so the probe is too.
+
+    webmatch asks it last, only for tracks nothing else corroborated, which is
+    exactly when a silent failure is invisible: the track was already
+    unmatched, so "SoundCloud found nothing" and "SoundCloud was not reachable"
+    produce the same row. Measured, it corroborated 1 of 236 tracks, and a
+    source that rare has to be known to be working when it says nothing.
+    """
+    return _ytdlp_search("scsearch", "soundcloud")
+
+
 def _ncs(s):
     """NCS publishes no API, so this asks whether its markup still parses.
 
@@ -340,6 +499,18 @@ PROBES = {
     "ytmusic": _ytmusic,
     "genius": _genius,
     "ncs": _ncs,
+    # These three are queried by identify, textsearch, origin and lastfm_tags,
+    # and had no probe. A source with no probe is the case this module was
+    # written to prevent: nothing it failed to say could be told from an
+    # absence, so an outage at AcoustID read as "this track is unknown" and an
+    # outage at Discogs read as "no release by that name".
+    "acoustid": _acoustid,
+    "discogs": _discogs,
+    "lastfm": _lastfm,
+    # Plain YouTube is not YouTube Music. webmatch asks both, they break
+    # separately, and only one of them was watched.
+    "youtube": _youtube,
+    "soundcloud": _soundcloud,
 }
 
 

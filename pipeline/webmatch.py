@@ -364,6 +364,9 @@ def src_youtube(artist, title):
     name IS the artist and the result is real metadata. Everything else is
     somebody's upload, where the channel is a channel and only the video title
     says anything about who made the song."""
+    err = _down("youtube")
+    if err:
+        return None, err
     try:
         p = subprocess.run(
             ["yt-dlp", "--skip-download", "--no-warnings", "--flat-playlist",
@@ -391,6 +394,9 @@ def src_youtube(artist, title):
 
 
 def src_soundcloud(artist, title):
+    err = _down("soundcloud")
+    if err:
+        return None, err
     try:
         p = subprocess.run(
             ["yt-dlp", "--skip-download", "--no-warnings", "--flat-playlist",
