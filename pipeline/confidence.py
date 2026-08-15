@@ -117,9 +117,22 @@ def agreement(conn, path, field):
             "human": evidence.HUMAN in agree,
             "audio": any(r["source"] in evidence.AUDIO_DERIVED
                          for r in rows if r["value_norm"] == top),
+            # Both sides counted the same way, and the way `dissent` is
+            # counted: without the families that are the file arguing with
+            # itself. A value is only a runner-up if something real holds it,
+            # so listing `local` beside that something would credit the
+            # filename with a vote the rest of this module refuses it, and
+            # counting it on one side of a margin and not the other would
+            # make "3 families beat 1" arithmetic about two different things.
+            # `agree` itself keeps every family, because that is what it has
+            # always meant and `why_review` prints it.
+            "agree_independent": sorted(agree - IGNORE_DISSENT),
             "runner_up": shown[runner] if runner else None,
-            "runner_up_families": sorted(by_value[runner]) if runner else [],
-            "margin": (len(agree) - len(by_value[runner])) if runner else None}
+            "runner_up_families": (sorted(by_value[runner] - IGNORE_DISSENT)
+                                   if runner else []),
+            "margin": (len(agree - IGNORE_DISSENT)
+                       - len(by_value[runner] - IGNORE_DISSENT))
+            if runner else None}
 
 
 def contested(conn, path, proposed):
@@ -208,7 +221,7 @@ def beat(conn, path, field):
     if got["human"]:
         return (f"{field}: you settled it, over \"{got['runner_up']}\" "
                 f"from {', '.join(got['runner_up_families'])}")
-    n, m = len(got["agree"]), len(got["runner_up_families"])
+    n, m = len(got["agree_independent"]), len(got["runner_up_families"])
     how = "beat" if n > m else "tied with, and sorted above"
     return (f"{field}: {n} famil{'y' if n == 1 else 'ies'} {how} {m} "
             f"for \"{got['runner_up']}\"")
