@@ -660,6 +660,29 @@ def digest(fields):
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:16]
 
 
+def disc_number(value):
+    """-> a disc number worth writing, or None.
+
+    Discs are counted from 1, so 0, a negative and a fraction are all a
+    catalogue saying something it does not mean. A blank field beats a wrong
+    one, and `int()` alone would not catch any of them: it truncates 1.9 to 1
+    and passes -1 straight through, and "0" is a non-empty string so a plain
+    truthiness test lets that past as well.
+
+    Every one of the 1592 disc numbers in this library is already a positive
+    int, so this changes nothing today. It is here so the MP4 and MP3 paths
+    cannot disagree about what counts as writable, which is the bug that put
+    this function in the file.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        n = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
 def write_generic(dst, fields, art_path, lyrics):
     """FLAC / M4A / OGG. ID3 frames do not exist there, so map onto the
     container's own scheme. Roughly 5% of a mixed library is not MP3, and
@@ -714,19 +737,30 @@ def write_generic(dst, fields, art_path, lyrics):
         # ----:com.apple.iTunes:TRACKNUMBER, which almost nothing reads, and
         # left an inherited trkn beside it free to disagree. The MP3 path
         # writes TRCK and deletes it when unknown; this is the same rule.
-        # disk always goes: nothing here knows a disc number, so any that is
-        # here came in with the file.
+        # The disc number goes in the native `disk` atom for exactly the same
+        # reason. This used to pop it and stop, on the grounds that nothing
+        # here knew a disc number: cascade has known one since it started
+        # reading Deezer albums, the MP3 path has written TPOS from it all
+        # along, and measured on the library 316 of the 350 m4a tracks had one
+        # to write. All 250 that shipped carried no disc number at all.
         f.pop("disk", None)
         f.pop("trkn", None)
         f.pop("----:com.apple.iTunes:TRACKNUMBER", None)
+        f.pop("----:com.apple.iTunes:DISCNUMBER", None)
         if fields.get("tracknumber"):
             try:
                 f["trkn"] = [(int(fields["tracknumber"]),
                               int(fields.get("total_tracks") or 0))]
             except (TypeError, ValueError):
                 pass
+        disc = disc_number(fields.get("discnumber"))
+        if disc:
+            # Second slot is the disc total, which nothing here knows. 0 is
+            # how MP4 spells "unset" for it, and is what mutagen writes back
+            # for a file that only states the disc.
+            f["disk"] = [(disc, 0)]
         for k, v in fields.items():
-            if k in m or k in ("tracknumber", "total_tracks"):
+            if k in m or k in ("tracknumber", "total_tracks", "discnumber"):
                 continue
             atom = f"----:com.apple.iTunes:{k.upper()}"
             if v in (None, ""):
@@ -832,8 +866,9 @@ def _id3_identity(t, txxx, ident):
                 else str(ident["track_number"])])])
         else:
             t.delall("TRCK")
-        if ident.get("disc_number"):
-            t.setall("TPOS", [TPOS(encoding=3, text=[str(ident["disc_number"])])])
+        disc = disc_number(ident.get("disc_number"))
+        if disc:
+            t.setall("TPOS", [TPOS(encoding=3, text=[str(disc)])])
         else:
             t.delall("TPOS")
 
@@ -1165,6 +1200,13 @@ def write_one(src, dst, ident, audio, verified, lyrics, extra, dry=False,
             # trkn atom's second slot. The MP3 path writes the same pair into
             # TRCK as "4/12".
             "total_tracks": (ident or {}).get("total_tracks"),
+            # Fills the native `disk` atom on MP4 and DISCNUMBER on Vorbis,
+            # which is what the MP3 path has always written into TPOS.
+            # Validated here rather than only in the MP4 branch: the Vorbis
+            # branch writes every field straight through, uppercased, so a
+            # value checked in one container and not the other is the exact
+            # divergence this whole change exists to close.
+            "discnumber": disc_number((ident or {}).get("disc_number")),
             "album": (ident or {}).get("album"),
             "date": (ident or {}).get("year"),
             "genre": primary,
