@@ -427,6 +427,15 @@ def propose(found, workers=None):
             f["stamp"] = old["stamp"]
             f["intro_cut"] = old["intro_cut"]
             f["snapped"] = old.get("snapped", False)
+            # And carry the mark forward, which is the whole of it. Setting
+            # this flag on the run that notices the file moved is not enough:
+            # that run also writes the new stamp, so the NEXT run matches and
+            # takes this branch, and a flag that stopped here would be dropped
+            # exactly one run after it was raised. The answer would then apply
+            # to the replacement after all, which is what the flag exists to
+            # prevent. It survives until the file moves again.
+            if old.get("changed_since_answered"):
+                f["changed_since_answered"] = True
             return
         secs, snapped = song_start(f["path"], f["shared_secs"])
         if secs is None:
@@ -444,7 +453,12 @@ def propose(found, workers=None):
         # policy for a confirmed bumper is to fetch a clean copy and swap it
         # in, so "this file changed" is the expected shape of exactly the case
         # that must not be cut twice. Marked rather than cut, and cuts()
-        # refuses it until you answer again. Refusing costs a bumper left in;
+        # refuses it from then on. Not "until you answer again": hints.tsv
+        # records the answer and not when it was given, so a second `intro=y`
+        # is the same line as the first and nothing here can tell them apart.
+        # The escapes are `intro=n`, which is the right answer for the clean
+        # copy this case exists to describe, and `intro=<seconds>`, which
+        # applies whatever the cluster says. Refusing costs a bumper left in;
         # the other way round costs the first seven seconds of the song.
         if old is not None:
             f["changed_since_answered"] = True

@@ -121,6 +121,25 @@ YOURS = "the link you gave"
 NAMESPACES = ("intros:", "requested:", "missing:")
 
 
+def mine(done, args):
+    """-> the keys in the shared report that belong to the mode being run.
+
+    One report file holds four namespaces, so "this mode's attempts" is a
+    question with a real answer and both callers need the same one. The
+    default mode is the unprefixed namespace, which is whatever carries none
+    of the three prefixes rather than everything.
+
+    Reading it as "no prefix, so no keys" was how `--retry` came to do nothing
+    at all in the default mode: it printed that it had forgotten 0 attempts
+    and skipped every file it had already tried, which is the opposite of what
+    the flag is for and is silent about it.
+    """
+    prefix = _done_key("", args)
+    if prefix:
+        return {k for k in done if k.startswith(prefix)}
+    return {k for k in done if not k.startswith(NAMESPACES)}
+
+
 def _done_key(path, args):
     """Where an attempt is recorded in the shared report.
 
@@ -527,8 +546,7 @@ def main():
         # Only this mode's keys. Clearing the whole record would re-attempt
         # 628 files nobody asked about, and the modes are keyed apart exactly
         # so they can be repeated independently.
-        prefix = _done_key("", args)
-        skipped = {k for k in done if k.startswith(prefix)} if prefix else set()
+        skipped = mine(done, args)
         print(f"  --retry: forgetting {len(skipped)} earlier attempts")
         done = {k: v for k, v in done.items() if k not in skipped}
 
@@ -618,9 +636,7 @@ def main():
     # --intros run it had already attempted the 628 files a quality sweep
     # looked at. The default mode is the unprefixed namespace, so it is
     # whatever carries none of the three prefixes.
-    prefix = _done_key("", args)
-    tried = sum(1 for k in done if (k.startswith(prefix) if prefix
-                                    else not k.startswith(NAMESPACES)))
+    tried = len(mine(done, args))
 
     if not todo:
         left = ("no confirmed intro left to find a clean copy of"
