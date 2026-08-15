@@ -1254,6 +1254,52 @@ are already at confidence 1.00 because they were confirmed by hand, and none
 of the 64 below that is contested. It is written for the next import rather
 than this one.
 
+## Giving it back
+
+Everything here reads from free databases, so there is a stage that sends
+something back. Nothing is submitted without `--submit`: the default prints
+what would go and sends nothing, because a bad submission to a shared
+database is not a bad run, it is somebody else's bad data.
+
+```bash
+./.venv/bin/python pipeline/giveback.py                     # what would go
+./.venv/bin/python pipeline/giveback.py --acoustid --submit
+./.venv/bin/python pipeline/giveback.py --lrclib --submit --limit 20
+```
+
+It is not part of `run.py` and is not meant to be. A full run is something
+you do to your own files; this is something you do to someone else's
+database, and it should take a decision each time.
+
+**Auto-accepted rows only.** A row in review is one the pipeline could not
+settle, and publishing a guess is worse than publishing nothing: a wrong
+fingerprint-to-recording link is repeated back to everyone who fingerprints
+that song afterwards. That leaves 1276 fingerprints with a confirmed
+recording id for AcoustID.
+
+**AcoustID** takes the fingerprint and the MusicBrainz recording it belongs
+to, batched 50 at a time. It needs `acoustid_user_key` in
+`config/secrets.json`, which is your key and a different thing from
+`acoustid_key`: that one identifies Muzzi, this one identifies you as the
+submitter. Without it the stage refuses rather than sending anonymously.
+
+**LRCLIB** takes timed lyrics, and every sheet is checked against LRCLIB
+before it is offered, because most of them came from there. Sampled over 40
+tracks, 29 were already present and 4 were genuinely missing, so roughly one
+sheet in eight is worth sending and the rest would be a no-op. That check
+matters more than it sounds: LRCLIB gates publishing on proof of work, about
+12 million SHA-256 hashes and some 7 seconds of one core per sheet, so
+offering everything would cost hours to publish almost nothing.
+
+**MusicBrainz is not here**, and that is measured rather than skipped. Its
+API accepts tags, ratings, barcodes, ISRCs and collections, and the
+documentation says in as many words that for most data additions you should
+use the website instead. Correcting an artist name, which is the thing this
+library actually learns, is not submittable at any endpoint. Of what the API
+does take, this library has 2 ISRCs, no barcodes and no ratings, and its
+genres are the Last.fm folksonomy that `genres.py` exists to clean up.
+Pushing that back into a catalogue is the wrong direction.
+
 ## Auditing what was written
 
 `pipeline/verify.py` reads tags only. To check a tag against the audio it
