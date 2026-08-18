@@ -76,3 +76,8 @@ scratch_*.py
 run_stage.py
 patch_*.py
 *.log
+
+# ---------------------------------------------------------- agent worktrees
+# Worktree checkouts that coding agents create. They are full copies of the
+# tree and must never be committed back into it.
+.t3-worktrees/
